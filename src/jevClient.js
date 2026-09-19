@@ -39,7 +39,10 @@ export class JevClient {
     });
 
     if (!res.ok) {
-      throw new Error(`Jev API error: ${res.status} ${res.statusText}`);
+      // 422等の場合、レスポンス本文に不正なフィールドの詳細が入っていることが多いため
+      // 原因特定のために本文も出力する(実APIの仕様がまだ未検証のため)。
+      const errorBody = await res.text().catch(() => "(本文取得失敗)");
+      throw new Error(`Jev API error: ${res.status} ${res.statusText} - ${errorBody}`);
     }
 
     const body = await res.json();
