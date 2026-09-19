@@ -21,6 +21,18 @@ src/
 
 ## セットアップ
 
+### 対応バージョンの制約(重要)
+
+`mineflayer`(正確には内部で使う`minecraft-data`/`node-minecraft-protocol`)は最新のMinecraftリリースに追従するまでタイムラグがある。2026年9月19日時点でnpm最新の`minecraft-data@3.116.0`が対応しているのは **protocol 776(Minecraft 26.2)まで**で、**26.3(protocol 777、2026年9月15日リリース)には未対応**(接続時に `Unsupported protocol version '777'` で失敗する)。
+
+Xbox Game Pass経由のMinecraftは自動更新されるため、ワールドを起動しているMinecraft本体が26.3以降になっている場合は接続できない。回避策:
+
+1. Minecraft Launcherの「起動構成(Installations)」タブで新しい構成を作成し、バージョンを **26.2 以前**(mineflayer対応済み)に指定する
+2. その構成で新規にシングルプレイワールドを作成する(26.3で一度保存したワールドを古いバージョンで開くと警告が出るため、新規ワールド推奨)
+3. そのワールドで「LANに公開」する
+
+対応バージョンが更新されたら`npm update`で追従できるか確認すること。
+
 1. Minecraft Java Edition をローカルで起動し、ワールドをLAN公開する(サーバー運営権限は不要)。
 2. 依存関係をインストール:
    ```
