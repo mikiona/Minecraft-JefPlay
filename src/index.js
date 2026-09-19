@@ -73,3 +73,8 @@ bot.once("spawn", () => {
 
 bot.on("kicked", (reason) => console.error("[index] kicked:", reason));
 bot.on("error", (err) => console.error("[index] error:", err));
+bot.on("end", (reason) =>
+  console.log(
+    `[index] disconnected (reason: ${reason ?? "unknown"}). 接続直後に切れる場合はMC_VERSIONが実際のゲームバージョンと一致しているか確認してください。`
+  )
+);
