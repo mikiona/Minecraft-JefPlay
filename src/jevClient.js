@@ -1,11 +1,9 @@
 // Jev (TypeSafe AI "System One") APIクライアント。
 //
-// 注意: このクライアントが送受信するJSON形式は、調査メモに記載された
-// 仕様(エンドポイント/認証方式/Choice・Score・Noulという3種の質問形式)を
-// もとに組み立てた推測であり、公式ドキュメントで検証したものではない。
-// JEV_API_KEY が未設定の場合はモックモードで動作し、Mineflayer側の
-// 動作確認だけは実APIなしでも行えるようにしてある。
-// 実APIの実際のレスポンス形式が判明したら parseResponse() を合わせて調整すること。
+// 公式ドキュメント(https://docs.typesafe.ai)で確認した仕様に基づく実装。
+// リクエスト: { model, questions: { id: { type, instructions, criteria } }, state }
+// レスポンス: { model, answers: { id: { type, choice|score|noul, confidence?, probabilities? } }, usage }
+// JEV_API_KEY が未設定の場合はモックモードで動作する。
 
 export class JevClient {
   constructor({ apiKey, apiUrl, model, freshnessMs, fetchImpl = fetch }) {
@@ -31,10 +29,6 @@ export class JevClient {
       };
     }
 
-    // 実APIの422エラーから判明: questionsはidをキーにした辞書型で送る必要があり、
-    // modelフィールドも必須。さらに、prompt/optionsはサーバー側で無視され
-    // (エコーバックされたinputに含まれていなかった)、代わりにトップレベルの
-    // "state"フィールドが必須と判明した。
     const questionsById = Object.fromEntries(
       questions.map(({ id, ...rest }) => [id, rest])
     );
@@ -72,24 +66,19 @@ export class JevClient {
   }
 
   parseResponse(body, questions) {
-    // 未検証: リクエストのquestionsが辞書型だったため、レスポンスのanswersも
-    // 辞書型(id -> 結果)である可能性が高いが未確認。配列/辞書どちらでも
-    // 対応できるようにしておく。
-    const rawAnswers = body?.answers ?? body?.results ?? {};
-    const byId = Array.isArray(rawAnswers)
-      ? new Map(rawAnswers.map((a) => [a.id, a]))
-      : new Map(Object.entries(rawAnswers));
+    // answers: { id: { type, choice|score|noul, confidence?, probabilities? } }
+    const answers = body?.answers ?? {};
 
     return questions.map((q) => {
-      const raw = byId.get(q.id);
+      const raw = answers[q.id];
       if (!raw) {
         return { id: q.id, type: q.type, value: null, confidence: 0 };
       }
       return {
         id: q.id,
         type: q.type,
-        value: raw.value ?? raw.choice ?? raw.score ?? raw.probability ?? null,
-        confidence: raw.confidence ?? raw.probability ?? null,
+        value: raw.choice ?? raw.score ?? raw.noul ?? null,
+        confidence: raw.confidence ?? null,
       };
     });
   }
@@ -97,14 +86,15 @@ export class JevClient {
   mockAnswers(questions) {
     return questions.map((q) => {
       if (q.type === "choice") {
-        const options = q.options ?? [];
-        const value = options.length
-          ? options[Math.floor(Math.random() * options.length)]
+        const optionKeys = Object.keys(q.criteria ?? {});
+        const value = optionKeys.length
+          ? optionKeys[Math.floor(Math.random() * optionKeys.length)]
           : null;
-        return { id: q.id, type: q.type, value, confidence: 1 / (options.length || 1) };
+        return { id: q.id, type: q.type, value, confidence: 1 / (optionKeys.length || 1) };
       }
       if (q.type === "score") {
-        return { id: q.id, type: q.type, value: Math.floor(Math.random() * 5) + 1, confidence: 0.5 };
+        const levels = Array.isArray(q.criteria) ? q.criteria.length : 5;
+        return { id: q.id, type: q.type, value: Math.floor(Math.random() * levels), confidence: 0.5 };
       }
       // noul: yes確率
       return { id: q.id, type: q.type, value: Math.random(), confidence: 0.5 };

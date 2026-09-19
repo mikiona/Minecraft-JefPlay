@@ -24,20 +24,18 @@ export function buildState(bot) {
 }
 
 // state から Jev への questions を組み立てる。
-// 最大20個程度という制約(メモ記載)を意識し、ここでは代表的な
-// 「次に何をするか」の1問(Choice)に絞った最小構成にしている。
-export function buildQuestions(state) {
-  const options = ["explore", "flee", "attack_nearest_hostile", "eat", "idle"];
-
+// 公式ドキュメント(docs.typesafe.ai)で確認した仕様に基づく:
+// choice型は { type, instructions, criteria } の形式。
+// criteriaのキーがそのまま選択肢を表し、optionsフィールドは不要。
+// 状況データ(HP/food等)は文字列化してinstructionsに埋め込まず、
+// リクエストのトップレベルの"state"フィールドとして別送りする。
+export function buildQuestions() {
   return [
     {
       id: "next_action",
       type: "choice",
-      prompt: buildPrompt(state),
-      options,
-      // 未検証: 実APIが"criteria"は辞書型必須と返したため、
-      // 選択肢ごとの判断基準を説明する辞書として組み立てた推測値。
-      // キー構造(option名をキーにする、が正しいか)は公式ドキュメント未確認。
+      instructions:
+        "現在の状況(HP/food/周辺の敵性エンティティ/天候)に最も適した行動を選んでください",
       criteria: {
         explore: "周辺に脅威がなく、食料も十分にある場合",
         flee: "近くに敵性エンティティがいて体力が低い場合",
@@ -47,13 +45,4 @@ export function buildQuestions(state) {
       },
     },
   ];
-}
-
-function buildPrompt(state) {
-  return [
-    `HP=${state.health}`,
-    `food=${state.food}`,
-    `nearby=${state.nearbyEntities.length}`,
-    `raining=${state.isRaining}`,
-  ].join(" ");
 }

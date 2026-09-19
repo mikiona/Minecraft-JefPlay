@@ -16,9 +16,8 @@ const config = {
   freshnessMs: Number(process.env.RESPONSE_FRESHNESS_MS ?? 5000),
   jevApiKey: process.env.JEV_API_KEY || null,
   jevApiUrl: process.env.JEV_API_URL ?? "https://api.typesafe.ai/v1/systemone",
-  // 未検証: 実APIが422で"model"フィールド必須と返したため追加。
-  // 正しい値(モデル名)は公式ドキュメント未確認のため、JEV_MODELで上書き可能にしてある。
-  jevModel: process.env.JEV_MODEL || "system-one",
+  // 公式ドキュメント(docs.typesafe.ai)確認済み: 推奨モデル名は"jev-latest"。
+  jevModel: process.env.JEV_MODEL || "jev-latest",
   viewerPort: Number(process.env.VIEWER_PORT ?? 3000),
   enableViewer: process.argv.includes("--viewer"),
 };

@@ -11,7 +11,7 @@ export function startDecisionLoop(bot, jevClient, { intervalMs }) {
 
     try {
       const state = buildState(bot);
-      const questions = buildQuestions(state);
+      const questions = buildQuestions();
       const result = await jevClient.ask(questions, state);
 
       if (!jevClient.isFresh(result)) {
