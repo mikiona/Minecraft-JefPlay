@@ -1,0 +1,21 @@
+{
+  "name": "minecraft-jefplay",
+  "version": "0.1.0",
+  "description": "Jev (TypeSafe AI System One) を使った Minecraft 自動操作 PoC",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "viewer": "node src/index.js --viewer"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mineflayer": "^4.23.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.30.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,62 @@
+import "dotenv/config";
+import mineflayer from "mineflayer";
+import { pathfinder, Movements, goals } from "mineflayer-pathfinder";
+import { mineflayer as mineflayerViewer } from "prismarine-viewer";
+import { JevClient } from "./jevClient.js";
+import { startDecisionLoop } from "./decisionLoop.js";
+
+const config = {
+  host: process.env.MC_HOST ?? "localhost",
+  port: Number(process.env.MC_PORT ?? 25565),
+  username: process.env.MC_USERNAME ?? "JevBot",
+  version: process.env.MC_VERSION || undefined,
+  decisionIntervalMs: Number(process.env.DECISION_INTERVAL_MS ?? 250),
+  freshnessMs: Number(process.env.RESPONSE_FRESHNESS_MS ?? 5000),
+  jevApiKey: process.env.JEV_API_KEY || null,
+  jevApiUrl: process.env.JEV_API_URL ?? "https://api.typesafe.ai/v1/systemone",
+  viewerPort: Number(process.env.VIEWER_PORT ?? 3000),
+  enableViewer: process.argv.includes("--viewer"),
+};
+
+const bot = mineflayer.createBot({
+  host: config.host,
+  port: config.port,
+  username: config.username,
+  version: config.version,
+});
+
+bot.loadPlugin(pathfinder);
+// actions.js から参照するための簡易アクセサ。
+bot.pathfinderGoals = { goals };
+
+const jevClient = new JevClient({
+  apiKey: config.jevApiKey,
+  apiUrl: config.jevApiUrl,
+  freshnessMs: config.freshnessMs,
+});
+
+if (jevClient.mockMode) {
+  console.warn(
+    "[index] JEV_API_KEY が未設定のため Jev API はモックモードで動作します(ランダム応答)。"
+  );
+}
+
+bot.once("spawn", () => {
+  const movements = new Movements(bot);
+  bot.pathfinder.setMovements(movements);
+
+  if (config.enableViewer) {
+    mineflayerViewer(bot, { port: config.viewerPort });
+    console.log(`[index] prismarine-viewer: http://localhost:${config.viewerPort}`);
+  }
+
+  console.log(`[index] ${config.username} spawned. decision loop starting...`);
+  const loop = startDecisionLoop(bot, jevClient, {
+    intervalMs: config.decisionIntervalMs,
+  });
+
+  bot.once("end", () => loop.stop());
+});
+
+bot.on("kicked", (reason) => console.error("[index] kicked:", reason));
+bot.on("error", (err) => console.error("[index] error:", err));
