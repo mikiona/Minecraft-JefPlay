@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "viewer": "node src/index.js --viewer"
+    "viewer": "node src/index.js --viewer",
+    "test": "node --test"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

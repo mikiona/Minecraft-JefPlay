@@ -1,17 +1,69 @@
 import { buildState, buildQuestions } from "./state.js";
 import { executeAction } from "./actions.js";
+import { JevFatalError } from "./jevClient.js";
+import { CooldownTracker } from "./cooldown.js";
+
+// 同一actionがこのtick数以上連続したら停滞とみなし警告する(既定: 250ms×120=30秒相当)。
+const STUCK_ACTION_TICKS = 120;
+// 位置がこの時間(ms)以上ほぼ変化しなければ停滞とみなし警告する。
+const STUCK_POSITION_MS = 30000;
+// 位置が変化したとみなす最小移動量(ブロック)。
+const POSITION_MOVE_THRESHOLD = 0.5;
+// 直近何件の行動履歴をstateに含めてJevに渡すか。
+const HISTORY_LIMIT = 8;
 
 // 一定周期でstateを観測 → Jevに質問 → 応答の鮮度/整合性を検証 → 行動実行、を繰り返す。
-export function startDecisionLoop(bot, jevClient, { intervalMs }) {
+export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs } = {}) {
   let stopped = false;
   let lastPosition = null;
   let lastLoggedAction = null;
+
+  // 停滞watchdog用の状態。
+  let sameActionStreak = 0;
+  let lastActionForStreak = null;
+  let lastMovedAt = Date.now();
+  let lastCheckedPosition = null;
+
+  // 直近の行動履歴(Jevへの判断材料として使う)。
+  const actionHistory = [];
+  const cooldown = new CooldownTracker(cooldownMs != null ? { durationMs: cooldownMs } : undefined);
+
+  const recordHistory = (action, result) => {
+    actionHistory.push({ action, result, timestamp: Date.now() });
+    if (actionHistory.length > HISTORY_LIMIT) actionHistory.shift();
+  };
+
+  const checkStuck = (actionName, position) => {
+    if (actionName === lastActionForStreak) {
+      sameActionStreak++;
+    } else {
+      sameActionStreak = 1;
+      lastActionForStreak = actionName;
+    }
+    if (sameActionStreak === STUCK_ACTION_TICKS) {
+      console.warn(`[decisionLoop] watchdog: 同一action(${actionName})が${STUCK_ACTION_TICKS}tick連続しています`);
+    }
+
+    if (position && lastCheckedPosition) {
+      const dx = position.x - lastCheckedPosition.x;
+      const dy = position.y - lastCheckedPosition.y;
+      const dz = position.z - lastCheckedPosition.z;
+      const moved = Math.sqrt(dx * dx + dy * dy + dz * dz) >= POSITION_MOVE_THRESHOLD;
+      if (moved) {
+        lastMovedAt = Date.now();
+      } else if (Date.now() - lastMovedAt >= STUCK_POSITION_MS) {
+        console.warn(`[decisionLoop] watchdog: 位置が${STUCK_POSITION_MS / 1000}秒以上変化していません`);
+        lastMovedAt = Date.now(); // 連続警告を避けるためリセット
+      }
+    }
+    lastCheckedPosition = position;
+  };
 
   const tick = async () => {
     if (stopped) return;
 
     try {
-      const state = buildState(bot);
+      const state = buildState(bot, { actionHistory });
       const questions = buildQuestions();
       const result = await jevClient.ask(questions, state);
 
@@ -31,24 +83,37 @@ export function startDecisionLoop(bot, jevClient, { intervalMs }) {
             );
             lastLoggedAction = nextAction.value;
           }
-          await executeAction(bot, nextAction.value, state);
+
+          let actionResult;
+          try {
+            actionResult = await executeAction(bot, nextAction.value, state, { cooldown });
+          } catch (err) {
+            actionResult = { ok: false, reason: err.message };
+          }
+          recordHistory(nextAction.value, actionResult?.ok ? "ok" : "failed");
+          checkStuck(nextAction.value, state.position);
         }
       }
 
       lastPosition = state.position;
     } catch (err) {
+      if (err instanceof JevFatalError) {
+        console.error("[decisionLoop] 致命的エラー、ループを停止します:", err.message);
+        stop();
+        return;
+      }
       console.error("[decisionLoop] error:", err.message);
     }
   };
 
   const timer = setInterval(tick, intervalMs);
 
-  return {
-    stop() {
-      stopped = true;
-      clearInterval(timer);
-    },
-  };
+  function stop() {
+    stopped = true;
+    clearInterval(timer);
+  }
+
+  return { stop };
 }
 
 // 直前の観測位置から大きく飛んでいたら、古い/不整合な状態として扱う。

@@ -24,6 +24,10 @@ const config = {
   jevModel: process.env.JEV_MODEL || "jev-latest",
   viewerPort: Number(process.env.VIEWER_PORT ?? 3000),
   enableViewer: process.argv.includes("--viewer"),
+  // 失敗した攻撃/採掘対象を再試行しない期間(ミリ秒)。既定35秒。
+  actionCooldownMs: process.env.ACTION_COOLDOWN_MS
+    ? Number(process.env.ACTION_COOLDOWN_MS)
+    : undefined,
 };
 
 const bot = mineflayer.createBot({
@@ -73,6 +77,7 @@ bot.once("spawn", () => {
   console.log(`[index] ${config.username} spawned. decision loop starting...`);
   const loop = startDecisionLoop(bot, jevClient, {
     intervalMs: config.decisionIntervalMs,
+    cooldownMs: config.actionCooldownMs,
   });
 
   bot.once("end", () => loop.stop());
