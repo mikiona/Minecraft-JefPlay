@@ -8,9 +8,10 @@
 // 実APIの実際のレスポンス形式が判明したら parseResponse() を合わせて調整すること。
 
 export class JevClient {
-  constructor({ apiKey, apiUrl, freshnessMs, fetchImpl = fetch }) {
+  constructor({ apiKey, apiUrl, model, freshnessMs, fetchImpl = fetch }) {
     this.apiKey = apiKey;
     this.apiUrl = apiUrl;
+    this.model = model;
     this.freshnessMs = freshnessMs;
     this.fetchImpl = fetchImpl;
     this.mockMode = !apiKey;
@@ -29,13 +30,19 @@ export class JevClient {
       };
     }
 
+    // 実APIの422エラーから判明: questionsはidをキーにした辞書型で送る必要があり、
+    // modelフィールドも必須。
+    const questionsById = Object.fromEntries(
+      questions.map(({ id, ...rest }) => [id, rest])
+    );
+
     const res = await this.fetchImpl(this.apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ questions }),
+      body: JSON.stringify({ model: this.model, questions: questionsById }),
     });
 
     if (!res.ok) {
@@ -62,9 +69,13 @@ export class JevClient {
   }
 
   parseResponse(body, questions) {
-    // 未検証: 実際のレスポンスキー名が判明したらここを直す。
-    const rawAnswers = body?.answers ?? body?.results ?? [];
-    const byId = new Map(rawAnswers.map((a) => [a.id, a]));
+    // 未検証: リクエストのquestionsが辞書型だったため、レスポンスのanswersも
+    // 辞書型(id -> 結果)である可能性が高いが未確認。配列/辞書どちらでも
+    // 対応できるようにしておく。
+    const rawAnswers = body?.answers ?? body?.results ?? {};
+    const byId = Array.isArray(rawAnswers)
+      ? new Map(rawAnswers.map((a) => [a.id, a]))
+      : new Map(Object.entries(rawAnswers));
 
     return questions.map((q) => {
       const raw = byId.get(q.id);

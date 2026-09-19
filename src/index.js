@@ -16,6 +16,9 @@ const config = {
   freshnessMs: Number(process.env.RESPONSE_FRESHNESS_MS ?? 5000),
   jevApiKey: process.env.JEV_API_KEY || null,
   jevApiUrl: process.env.JEV_API_URL ?? "https://api.typesafe.ai/v1/systemone",
+  // 未検証: 実APIが422で"model"フィールド必須と返したため追加。
+  // 正しい値(モデル名)は公式ドキュメント未確認のため、JEV_MODELで上書き可能にしてある。
+  jevModel: process.env.JEV_MODEL || "system-one",
   viewerPort: Number(process.env.VIEWER_PORT ?? 3000),
   enableViewer: process.argv.includes("--viewer"),
 };
@@ -34,6 +37,7 @@ bot.pathfinderGoals = { goals };
 const jevClient = new JevClient({
   apiKey: config.jevApiKey,
   apiUrl: config.jevApiUrl,
+  model: config.jevModel,
   freshnessMs: config.freshnessMs,
 });
 
