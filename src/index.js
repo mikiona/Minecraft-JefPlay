@@ -1,4 +1,8 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
+// dotenvはデフォルトで既存のシステム環境変数を上書きしないため、
+// 過去に手動で$env:MC_PORT等を設定したPowerShellセッションが残っていると
+// .envの値が無視されてしまう。.envの値を常に優先させる。
+loadEnv({ override: true });
 import mineflayer from "mineflayer";
 // mineflayer-pathfinderはCommonJSモジュールで、Nodeの静的解析が
 // 名前付きexportを全て検出できないため、default importから取り出す。
