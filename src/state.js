@@ -35,9 +35,16 @@ export function buildQuestions(state) {
       type: "choice",
       prompt: buildPrompt(state),
       options,
-      // 未検証: 実APIが422で"criteria"フィールド必須と返したため追加。
-      // 正確な意味・期待される形式は公式ドキュメント未確認の推測値。
-      criteria: "現在の状況(HP/food/周辺の敵/天候)に最も適した行動を選ぶこと",
+      // 未検証: 実APIが"criteria"は辞書型必須と返したため、
+      // 選択肢ごとの判断基準を説明する辞書として組み立てた推測値。
+      // キー構造(option名をキーにする、が正しいか)は公式ドキュメント未確認。
+      criteria: {
+        explore: "周辺に脅威がなく、食料も十分にある場合",
+        flee: "近くに敵性エンティティがいて体力が低い場合",
+        attack_nearest_hostile: "近くに敵性エンティティがいて体力に余裕がある場合",
+        eat: "空腹度が低く、脅威が近くにない場合",
+        idle: "特に行動する必要がない場合",
+      },
     },
   ];
 }
