@@ -35,6 +35,9 @@ export function buildQuestions(state) {
       type: "choice",
       prompt: buildPrompt(state),
       options,
+      // 未検証: 実APIが422で"criteria"フィールド必須と返したため追加。
+      // 正確な意味・期待される形式は公式ドキュメント未確認の推測値。
+      criteria: "現在の状況(HP/food/周辺の敵/天候)に最も適した行動を選ぶこと",
     },
   ];
 }
