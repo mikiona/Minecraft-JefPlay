@@ -12,7 +12,7 @@ export function startDecisionLoop(bot, jevClient, { intervalMs }) {
     try {
       const state = buildState(bot);
       const questions = buildQuestions(state);
-      const result = await jevClient.ask(questions);
+      const result = await jevClient.ask(questions, state);
 
       if (!jevClient.isFresh(result)) {
         console.warn("[decisionLoop] stale response, skipping");

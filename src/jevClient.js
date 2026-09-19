@@ -17,8 +17,9 @@ export class JevClient {
     this.mockMode = !apiKey;
   }
 
-  // questions: [{ id, type: 'choice'|'score'|'noul', prompt, options? }]
-  async ask(questions) {
+  // questions: [{ id, type: 'choice'|'score'|'noul', prompt, options?, criteria? }]
+  // state: buildState()の出力(HP/food/周辺状況などの構造化データ)
+  async ask(questions, state) {
     const requestedAt = Date.now();
 
     if (this.mockMode) {
@@ -31,7 +32,9 @@ export class JevClient {
     }
 
     // 実APIの422エラーから判明: questionsはidをキーにした辞書型で送る必要があり、
-    // modelフィールドも必須。
+    // modelフィールドも必須。さらに、prompt/optionsはサーバー側で無視され
+    // (エコーバックされたinputに含まれていなかった)、代わりにトップレベルの
+    // "state"フィールドが必須と判明した。
     const questionsById = Object.fromEntries(
       questions.map(({ id, ...rest }) => [id, rest])
     );
@@ -42,7 +45,7 @@ export class JevClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ model: this.model, questions: questionsById }),
+      body: JSON.stringify({ model: this.model, questions: questionsById, state }),
     });
 
     if (!res.ok) {
