@@ -5,6 +5,7 @@ import { executeAction } from "./actions.js";
 export function startDecisionLoop(bot, jevClient, { intervalMs }) {
   let stopped = false;
   let lastPosition = null;
+  let lastLoggedAction = null;
 
   const tick = async () => {
     if (stopped) return;
@@ -24,6 +25,12 @@ export function startDecisionLoop(bot, jevClient, { intervalMs }) {
       } else {
         const nextAction = result.answers.find((a) => a.id === "next_action");
         if (nextAction?.value) {
+          if (nextAction.value !== lastLoggedAction) {
+            console.log(
+              `[decisionLoop] action=${nextAction.value} confidence=${nextAction.confidence} source=${result.source}`
+            );
+            lastLoggedAction = nextAction.value;
+          }
           await executeAction(bot, nextAction.value, state);
         }
       }
