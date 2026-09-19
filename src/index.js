@@ -1,7 +1,9 @@
 import "dotenv/config";
 import mineflayer from "mineflayer";
-import { pathfinder, Movements, goals } from "mineflayer-pathfinder";
-import { mineflayer as mineflayerViewer } from "prismarine-viewer";
+// mineflayer-pathfinderはCommonJSモジュールで、Nodeの静的解析が
+// 名前付きexportを全て検出できないため、default importから取り出す。
+import pathfinderPkg from "mineflayer-pathfinder";
+const { pathfinder, Movements, goals } = pathfinderPkg;
 import { JevClient } from "./jevClient.js";
 import { startDecisionLoop } from "./decisionLoop.js";
 
@@ -46,8 +48,19 @@ bot.once("spawn", () => {
   bot.pathfinder.setMovements(movements);
 
   if (config.enableViewer) {
-    mineflayerViewer(bot, { port: config.viewerPort });
-    console.log(`[index] prismarine-viewer: http://localhost:${config.viewerPort}`);
+    // prismarine-viewerはネイティブモジュール`canvas`に依存するため、
+    // --viewer指定時のみ動的にロードする(未使用時はcanvas不要にするため)。
+    import("prismarine-viewer")
+      .then(({ mineflayer: mineflayerViewer }) => {
+        mineflayerViewer(bot, { port: config.viewerPort });
+        console.log(`[index] prismarine-viewer: http://localhost:${config.viewerPort}`);
+      })
+      .catch((err) => {
+        console.error(
+          "[index] prismarine-viewerの読み込みに失敗しました。`npm install canvas` が必要な場合があります:",
+          err.message
+        );
+      });
   }
 
   console.log(`[index] ${config.username} spawned. decision loop starting...`);

@@ -37,6 +37,16 @@ src/
    npm run viewer
    ```
 
+### `npm run viewer`(ブラウザ可視化)を使う場合の注意
+
+`prismarine-viewer` はネイティブモジュール `canvas` に依存しており、標準の `npm install` には含まれない(`prismarine-viewer`側でdevDependency扱いのため)。`--viewer` を使う場合は追加で:
+
+```
+npm install canvas
+```
+
+が必要になることがある。Windowsでは `canvas` のビルドに Visual Studio Build Tools(C++ワークロード)が必要になる場合がある。`npm start`(viewerなし)だけならこの依存は不要。
+
 ## 未確認・要検討事項
 
 - Jev APIの実際のリクエスト/レスポンス形式(本実装は調査メモからの推測)
