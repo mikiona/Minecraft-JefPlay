@@ -1,7 +1,7 @@
 // bot周辺のブロック/エンティティ/プレイヤー状態を構造化し、
 // Jevに投げる質問(questions)を組み立てる。
 import { sampleTerrain } from "./terrain.js";
-import { classifyMob, isNightTime, selectBestByTier } from "./mobKnowledge.js";
+import { classifyMob, isNightTime, selectBestByTier, selectBestFood } from "./mobKnowledge.js";
 
 const NEARBY_RADIUS = 8;
 // 満腹度がこの値以下だとダッシュ不可(Minecraft仕様)。最優先で食事すべき閾値。
@@ -45,6 +45,10 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
       value: bot.food,
       urgent: bot.food != null && bot.food <= FOOD_URGENT_THRESHOLD,
       low: bot.food != null && bot.food <= FOOD_LOW_THRESHOLD,
+      // 満腹度が低くても所持食料が無ければeatは常に失敗する。この情報が無いと
+      // Jevが「food不足→eat」を選び続け、失敗し続けるだけの停滞が起きる
+      // (実際にログで確認した)。
+      hasFood: selectBestFood(items) !== null,
     },
     position: pos ? { x: pos.x, y: pos.y, z: pos.z } : null,
     timeOfDay: bot.time?.timeOfDay ?? null,
@@ -89,25 +93,35 @@ export function buildQuestions() {
       id: "next_action",
       type: "choice",
       instructions:
-        "現在の状況(HP/満腹度/周辺の敵性エンティティとその種別/夜間かどうか/装備/直近の行動履歴/" +
-        "周辺地形の安全性/拠点からの距離)に最も適した行動を選んでください。" +
-        "地形が安全でない場合は移動を伴う行動を避けてください。",
+        "現在の状況(HP/満腹度と食料の所持有無/周辺の敵性エンティティとその種別/夜間かどうか/装備/" +
+        "直近の行動履歴/周辺地形の安全性/拠点からの距離)に最も適した行動を選んでください。" +
+        "地形が安全でない場合は移動を伴う行動を避けてください。" +
+        "同じ行動を実行しても状況(HP/満腹度/位置など)が変化しない場合、その行動は効果が無いか" +
+        "失敗しているとみなし、他の行動に切り替えるべきです。",
       criteria: {
-        explore: "周辺に脅威がなく、満腹度も十分にあり、地形も安全な場合",
+        explore:
+          "他に緊急性のある行動(戦闘・逃走・食事・採掘・帰還)が不要なときのデフォルトの行動。" +
+          "周辺に脅威がなく地形が安全なら、特別な理由が無くても継続して探索し続けるべき。" +
+          "同じ場所に留まり続ける理由がない限りこれを選ぶこと",
         flee:
           "体力が10以下の場合、近くにクリーパーがいる場合、または敵性エンティティに3体以上囲まれている場合。" +
           "体力が低いまま戦闘を続けるのは避けるべき",
         attack_nearest_hostile:
           "体力が15以上に余裕があり、近くに敵性エンティティ(クリーパー・エンダーマンを除く)が" +
           "1〜2体のみいる場合。剣を装備できるとなお良い。体力が低下してきたら戦闘を継続せずfleeに切り替えるべき",
-        eat: "満腹度が17以下で機会があり脅威が近くにない場合。満腹度が6以下の場合は最優先で行うこと",
+        eat:
+          "満腹度が17以下で、食料を所持しており、脅威が近くにない場合。満腹度が6以下の場合は最優先で行うこと。" +
+          "食料を所持していない場合はeatを選ばず、代わりにexploreで食料源(動物等)を探すか、" +
+          "他の行動を選ぶこと",
         mine_nearest_ore:
           "周辺に採掘可能な鉱石があり、そのY座標が対象鉱石に適しており" +
           "(石炭はY136付近、鉄はY16付近、ダイヤ・レッドストーンはY-58付近)、" +
           "十分なツールを持ち、脅威がない場合",
         place_block: "足場や防御のためにブロックを設置する必要があり、設置可能なブロックアイテムを持っている場合",
         return_to_base: "拠点から離れすぎており、緊急の脅威がない場合",
-        idle: "特に行動する必要がない場合",
+        idle:
+          "本当に他に選ぶべき行動がない極めて限定的な場合のみ(例: 危険な地形に完全に囲まれ、" +
+          "移動も採掘も設置も戦闘も不可能な場合)。周辺が安全なだけの平常時はidleではなくexploreを選ぶこと",
       },
     },
   ];

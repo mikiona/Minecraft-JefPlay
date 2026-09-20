@@ -45,7 +45,7 @@ test("buildStateはterrain/recentActions/foodStatus/equipmentを含む構造を�
   assert.equal(state.nearbyEntities[0].engageStyle, "melee_ok");
   assert.ok("terrain" in state);
   assert.deepEqual(state.recentActions, history);
-  assert.deepEqual(state.foodStatus, { value: 15, urgent: false, low: true });
+  assert.deepEqual(state.foodStatus, { value: 15, urgent: false, low: true, hasFood: false });
   assert.ok("equipment" in state);
 });
 
@@ -57,6 +57,14 @@ test("actionHistory省略時は空配列になる", () => {
 test("foodStatus.urgentは満腹度6以下でtrueになる", () => {
   const state = buildState(makeBot({ food: 6 }));
   assert.equal(state.foodStatus.urgent, true);
+});
+
+test("foodStatus.hasFoodは所持食料の有無を反映する", () => {
+  const withFood = buildState(makeBot({ items: [{ name: "cooked_beef" }] }));
+  assert.equal(withFood.foodStatus.hasFood, true);
+
+  const withoutFood = buildState(makeBot({ items: [] }));
+  assert.equal(withoutFood.foodStatus.hasFood, false);
 });
 
 test("isNightは夜間tickでtrueになる", () => {
