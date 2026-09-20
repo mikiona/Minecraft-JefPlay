@@ -47,6 +47,30 @@ test("溶岩がある方向はhazard、通常の地形はclearと判定される
   assert.equal(result.isSafe, false);
 });
 
+test("水がある方向はwaterと判定される(hazardではない)", () => {
+  const blocks = new Map();
+  const setBlock = (x, y, z, name, boundingBox) => blocks.set(`${x},${y},${z}`, { name, boundingBox });
+
+  // east方向(dx=1)の1マス先を水に。
+  setBlock(1, 63, 0, "water", "empty");
+  setBlock(1, 64, 0, "water", "empty");
+  setBlock(1, 65, 0, "air", "empty");
+  setBlock(1, 66, 0, "air", "empty");
+
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    blockAt(pos) {
+      const key = `${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}`;
+      return blocks.get(key) ?? { name: "air", boundingBox: "empty" };
+    },
+  };
+
+  const result = sampleTerrain(bot);
+  assert.equal(result.samples.east[0], "water");
+  // waterはhazard扱いではないため、isSafe自体には影響しない。
+  assert.equal(result.isSafe, true);
+});
+
 test("周囲がすべて安全な地形ならisSafeがtrueになる", () => {
   const bot = {
     entity: { position: makeVec3(0, 64, 0) },

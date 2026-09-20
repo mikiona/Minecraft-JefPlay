@@ -236,7 +236,7 @@ test("fleeは脅威の座標から遠ざかる方向へ移動する", async () =
   const bot = {
     entity: { position: makeVec3(0, 64, 0) },
     entities: {
-      1: { name: "zombie", position: makeVec3(5, 64, 0) }, // 東側に脅威
+      1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(5, 64, 0) }, // 東側に脅威
     },
     pathfinderGoals: {
       goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
@@ -268,7 +268,7 @@ test("fleeは脅威から遠ざかる方向が地形的に危険なら、他の�
   const bot = {
     entity: { position: makeVec3(0, 64, 0) },
     entities: {
-      1: { name: "zombie", position: makeVec3(5, 64, 0) }, // 東に脅威 -> 遠ざかる方向は西
+      1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(5, 64, 0) }, // 東に脅威 -> 遠ざかる方向は西
     },
     pathfinderGoals: {
       goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
@@ -282,4 +282,79 @@ test("fleeは脅威から遠ざかる方向が地形的に危険なら、他の�
   const result = await executeAction(bot, "flee", state, {});
   assert.equal(result.ok, true);
   assert.notEqual(result.detail.direction, "west");
+});
+
+test("fleeとexploreは水方向(water)を安全な方向として選ばない", async () => {
+  let goalSet = null;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(5, 64, 0) }, // 東に脅威 -> 本来は西へ逃げたい
+    },
+    pathfinderGoals: {
+      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
+    },
+    pathfinder: { setGoal: () => {} },
+  };
+  // 西(逃げたい方向)が水、それ以外は安全。
+  const state = {
+    terrain: { samples: { north: ["clear"], south: ["clear"], east: ["clear"], west: ["water"] } },
+  };
+  const result = await executeAction(bot, "flee", state, {});
+  assert.equal(result.ok, true);
+  assert.notEqual(result.detail.direction, "west");
+});
+
+test("escape_waterはジャンプを有効にし、安全な陸地方向へ移動する", async () => {
+  let jumpState = null;
+  let goalSet = null;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    setControlState: (name, value) => {
+      if (name === "jump") jumpState = value;
+    },
+    pathfinderGoals: {
+      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
+    },
+    pathfinder: { setGoal: () => {} },
+  };
+  const state = {
+    terrain: { samples: { north: ["water"], south: ["clear"], east: ["water"], west: ["water"] } },
+  };
+  const result = await executeAction(bot, "escape_water", state, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.detail.direction, "south");
+  assert.equal(jumpState, true);
+  assert.ok(goalSet);
+});
+
+test("escape_waterは全方向waterでも停止せず、水が最も少ない方向へ移動する", async () => {
+  let jumpState = null;
+  let goalSet = null;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    setControlState: (name, value) => {
+      if (name === "jump") jumpState = value;
+    },
+    pathfinderGoals: {
+      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
+    },
+    pathfinder: { setGoal: () => {} },
+  };
+  // south方向はwaterが1個のみで、他は4個(相対的にsouthが浅い/近道)。
+  const state = {
+    terrain: {
+      samples: {
+        north: ["water", "water", "water", "water"],
+        south: ["water", "clear", "clear", "clear"],
+        east: ["water", "water", "water", "water"],
+        west: ["water", "water", "water", "water"],
+      },
+    },
+  };
+  const result = await executeAction(bot, "escape_water", state, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.detail.direction, "south");
+  assert.equal(jumpState, true);
+  assert.ok(goalSet, "水しかなくても必ずgotoを試みるべき");
 });

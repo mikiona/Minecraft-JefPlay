@@ -16,8 +16,8 @@ function makeVec3(x, y, z) {
   };
 }
 
-function makeBot({ entities = {}, food = 15, timeOfDay = 6000, items = [] } = {}) {
-  const selfEntity = { position: makeVec3(0, 64, 0) };
+function makeBot({ entities = {}, food = 15, timeOfDay = 6000, items = [], isInWater = false } = {}) {
+  const selfEntity = { position: makeVec3(0, 64, 0), isInWater };
   return {
     entity: selfEntity,
     entities,
@@ -57,6 +57,14 @@ test("actionHistory省略時は空配列になる", () => {
 test("foodStatus.urgentは満腹度6以下でtrueになる", () => {
   const state = buildState(makeBot({ food: 6 }));
   assert.equal(state.foodStatus.urgent, true);
+});
+
+test("isInWaterはbot.entity.isInWaterを反映する", () => {
+  const wet = buildState(makeBot({ isInWater: true }));
+  assert.equal(wet.isInWater, true);
+
+  const dry = buildState(makeBot({ isInWater: false }));
+  assert.equal(dry.isInWater, false);
 });
 
 test("foodStatus.hasFoodは所持食料の有無を反映する", () => {

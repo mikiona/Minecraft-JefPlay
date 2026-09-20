@@ -8,10 +8,14 @@ const ORE_PATTERN = /(coal|iron|copper|gold|diamond|redstone|lapis|emerald)_ore$
 const PLACEABLE_PATTERN = /_block$|^dirt$|^cobblestone$|^netherrack$/;
 // pathfinderの移動系操作が応答しない場合に諦めるまでの時間(既知のハング問題対策)。
 const PATHFINDER_TIMEOUT_MS = 8000;
+// flee判断で「脅威」とみなす最大距離(state.jsのNEARBY_RADIUSと合わせる)。
+// これが無いと50ブロック先のクモ等にまで反応し、無意味な方向へ逃げ続ける
+// (実機で確認: 水面浮上の瞬間に遠方の脅威を検出しescape_waterと交互発動)。
+const THREAT_DETECTION_RADIUS = 8;
 
 // 戻り値は { ok: boolean, reason?: string } に統一する。
 // decisionLoop側で行動履歴(recentActions)の成否記録に使う。
-export async function executeAction(bot, actionName, state, { cooldown } = {}) {
+export async function executeAction(bot, actionName, state, { cooldown, previousEscapeDirection } = {}) {
   // bot.pvp.attack()は一度呼ぶと対象を自動追跡・継続攻撃し続ける仕様のため、
   // attack以外の行動に切り替える際は明示的に停止しないと、flee等の移動指示と
   // 裏で競合し続ける(逃げているつもりでも追跡・攻撃が止まらない原因になる)。
@@ -34,6 +38,8 @@ export async function executeAction(bot, actionName, state, { cooldown } = {}) {
       return placeBlockNearby(bot);
     case "return_to_base":
       return returnToBase(bot, state);
+    case "escape_water":
+      return escapeWater(bot, state, previousEscapeDirection);
     case "idle":
     default:
       bot.pathfinder?.setGoal(null);
@@ -42,7 +48,10 @@ export async function executeAction(bot, actionName, state, { cooldown } = {}) {
 }
 
 // state.nearbyEntitiesは位置を持たないため、実座標が必要な処理(flee等)では
-// bot.entitiesから直接、最寄りの脅威(neutral_ignore以外)を探して返す。
+// bot.entitiesから直接、最寄りの脅威(kind === "Hostile mobs" かつ
+// neutral_ignore以外)を探して返す。kindチェックが無いと、魚(tropical_fish
+// 等)やプレイヤー自身/別プレイヤーまで「脅威」と誤認し、無意味な方向へ
+// fleeし続ける事例が実機で発生した(水面浮上時に多発)。
 function nearestThreatEntity(bot) {
   const pos = bot.entity?.position;
   if (!pos) return null;
@@ -50,8 +59,10 @@ function nearestThreatEntity(bot) {
   let nearestDist = Infinity;
   for (const e of Object.values(bot.entities)) {
     if (e === bot.entity || !e.position) continue;
+    if (e.kind !== "Hostile mobs") continue;
     if (classifyMob(e.name) === "neutral_ignore") continue;
     const dist = pos.distanceTo(e.position);
+    if (dist > THREAT_DETECTION_RADIUS) continue;
     if (dist < nearestDist) {
       nearest = e;
       nearestDist = dist;
@@ -60,13 +71,15 @@ function nearestThreatEntity(bot) {
   return nearest ? { entity: nearest, distance: nearestDist } : null;
 }
 
-// 地形サンプル(terrain.samples)を参照し、hazard/drop_or_no_floorを含まない
-// 安全な方向の一覧を返す。地形情報が無ければnullを返す。
+// 地形サンプル(terrain.samples)を参照し、hazard/drop_or_no_floor/waterを
+// 含まない安全な方向の一覧を返す。地形情報が無ければnullを返す。
+// waterを除外しないと、water(boundingBox上は空気と同じ判定)が"安全"と
+// 誤認識され、explore/fleeが平気で水中へ入り込んでしまう。
 function safeDirections(state) {
   const samples = state.terrain?.samples;
   if (!samples) return null;
   const safeDirs = Object.entries(samples)
-    .filter(([, classes]) => classes.every((c) => c !== "hazard" && c !== "drop_or_no_floor"))
+    .filter(([, classes]) => classes.every((c) => c !== "hazard" && c !== "drop_or_no_floor" && c !== "water"))
     .map(([name]) => name);
   return safeDirs.length ? safeDirs : null;
 }
@@ -130,13 +143,25 @@ function fleeFromNearest(bot, state) {
   };
 }
 
+// "Nearest"という名前にも関わらず距離でソートしておらず、範囲制限も無く
+// 「最初に見つかった」対象をそのまま攻撃していた(実質ランダムに近い)。
+// 最寄りかつ検出範囲内の対象を明示的に選ぶよう修正した。
 function attackNearestHostile(bot, state, cooldown) {
-  const target = Object.values(bot.entities).find((e) => {
-    if (!e.position || cooldown?.isOnCooldown(entityKey(e))) return false;
-    if (e.kind !== "Hostile mobs") return false;
+  const pos = bot.entity?.position;
+  let target = null;
+  let targetDist = Infinity;
+  for (const e of Object.values(bot.entities)) {
+    if (!e.position || cooldown?.isOnCooldown(entityKey(e))) continue;
+    if (e.kind !== "Hostile mobs") continue;
     const style = classifyMob(e.name);
-    return style !== "neutral_ignore" && style !== "avoid_melee";
-  });
+    if (style === "neutral_ignore" || style === "avoid_melee") continue;
+    const dist = pos ? pos.distanceTo(e.position) : 0;
+    if (dist > THREAT_DETECTION_RADIUS) continue;
+    if (dist < targetDist) {
+      target = e;
+      targetDist = dist;
+    }
+  }
   if (!target) return { ok: false, reason: "no_target" };
 
   try {
@@ -271,6 +296,59 @@ async function returnToBase(bot, state) {
   if (!goals?.GoalNear || !bot.pathfinder) return { ok: false, reason: "no_pathfinder" };
 
   return gotoWithTimeout(bot, new goals.GoalNear(home.x, home.y, home.z, 2));
+}
+
+// 指定方向のterrainサンプルに含まれる"water"の数を数える。
+// 広い水域(全方向waterだらけ)でも、相対的に浅い/短い方向を選ぶための指標。
+function countWaterInDirection(state, dirName) {
+  const classes = state?.terrain?.samples?.[dirName];
+  if (!classes) return Infinity;
+  return classes.filter((c) => c === "water").length;
+}
+
+// 水中(bot.entity.isInWater)からの緊急脱出。terrain上で"water"でない
+// 方向へ向かい、同時にジャンプを有効にして浮上を助ける(Minecraftの
+// 水中では泳ぐ/ジャンプで上昇できる)。安全な(waterを含まない)方向が
+// 無い場合でも、その場に留まらず必ず水が最も少ない方向へ移動を試みる
+// (広い水域の中心でjump_onlyのまま停止し続け、溺れてHPが1まで落ちる
+// 事例が実機で発生したため、必ず移動する設計に変更した)。
+//
+// previousDirection: 直前tickで選んだ方向。250ms周期で毎回ランダムに
+// 選び直すと west→east→south→west… と方向が定まらずその場で足踏みし
+// 続ける事例が実機で発生したため、まだ有効な方向であれば維持する。
+async function escapeWater(bot, state, previousDirection) {
+  if (!bot.entity?.position) return { ok: false, reason: "no_position" };
+
+  bot.setControlState?.("jump", true);
+  try {
+    const safeDirs = state ? safeDirections(state) : null;
+    let dir;
+    if (safeDirs) {
+      dir = previousDirection && safeDirs.includes(previousDirection)
+        ? previousDirection
+        : safeDirs[Math.floor(Math.random() * safeDirs.length)];
+    } else if (previousDirection) {
+      // 安全な方向が無くても、前回方向を維持する方が一貫した移動になる。
+      dir = previousDirection;
+    } else {
+      const dirNames = Object.keys(DIRECTION_VECTORS);
+      dirNames.sort(
+        (a, b) => countWaterInDirection(state, a) - countWaterInDirection(state, b) || Math.random() - 0.5
+      );
+      dir = dirNames[0];
+    }
+
+    const v = DIRECTION_VECTORS[dir];
+    const shore = bot.entity.position.offset(v.dx * 10, 0, v.dz * 10);
+    moveTo(bot, shore);
+    return { ok: true, detail: { direction: dir, target: { x: shore.x, y: shore.y, z: shore.z } } };
+  } finally {
+    // ジャンプ状態は次tickのexecuteAction冒頭(attack以外でforceStop相当は
+    // 行っていないため)に持ち越って構わない。水から出た後の行動選択時に
+    // 改めてsetControlStateがfalseへ戻されることを期待するのではなく、
+    // ここで明示的に一定時間後に解除する。
+    setTimeout(() => bot.setControlState?.("jump", false), 250);
+  }
 }
 
 function moveTo(bot, position) {

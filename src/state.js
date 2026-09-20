@@ -51,6 +51,7 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
       hasFood: selectBestFood(items) !== null,
     },
     position: pos ? { x: pos.x, y: pos.y, z: pos.z } : null,
+    isInWater: Boolean(bot.entity?.isInWater),
     timeOfDay: bot.time?.timeOfDay ?? null,
     isNight: isNightTime(bot.time?.timeOfDay),
     isRaining: bot.isRaining ?? false,

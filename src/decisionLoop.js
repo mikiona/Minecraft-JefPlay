@@ -30,6 +30,9 @@ export function startDecisionLoop(
   let lastPosition = null;
   let lastLoggedAction = null;
   let home = homePosition;
+  // 水中脱出中に選んだ方向。毎tickランダムに選び直すとwest→east→south…と
+  // 定まらずその場で足踏みし続けるため、水中にいる間は維持し続ける。
+  let lastWaterEscapeDirection = null;
 
   // 停滞watchdog用の状態。
   let sameActionStreak = 0;
@@ -80,6 +83,7 @@ export function startDecisionLoop(
       health: state.health,
       food: state.food,
       position: state.position,
+      isInWater: state.isInWater,
       isNight: state.isNight,
       nearbyEntities: state.nearbyEntities,
       hostileCount: state.hostileCount,
@@ -103,6 +107,32 @@ export function startDecisionLoop(
       }
 
       const state = buildState(bot, { actionHistory, homePosition: home });
+
+      // 緊急回避: 水中にいる場合、Jevの応答を待たず直ちに脱出を試みる。
+      // water(boundingBox上は空気と同じ判定)は通常の探索/逃走ロジックでは
+      // "安全"と誤認識されやすく、放置すると溺れ続ける・出られなくなる
+      // 事例が実機で確認されたため、HPチェックより先に処理する。
+      if (bot.entity?.isInWater) {
+        console.warn("[decisionLoop] 緊急回避: 水中にいるため、Jev応答を待たず脱出を試みます");
+        let escapeResult;
+        try {
+          escapeResult = await executeAction(bot, "escape_water", state, {
+            cooldown,
+            previousEscapeDirection: lastWaterEscapeDirection,
+          });
+        } catch (err) {
+          escapeResult = { ok: false, reason: err.message };
+        }
+        lastWaterEscapeDirection = escapeResult?.detail?.direction ?? lastWaterEscapeDirection;
+        recordHistory("escape_water", escapeResult?.ok ? "ok" : "failed");
+        checkStuck("escape_water", state.position);
+        logDecision("emergency", state, "escape_water", escapeResult);
+        lastPosition = state.position;
+        return;
+      }
+      // 水から出たら、次に水に入ったとき新しい状況で方向を選び直せるよう
+      // リセットする。
+      lastWaterEscapeDirection = null;
 
       // 緊急回避: HPが危険域まで下がっている場合、Jev API呼び出しの応答を
       // 待たず直ちにfleeを実行する。APIレイテンシに関係なく即応するための
