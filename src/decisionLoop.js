@@ -13,10 +13,12 @@ const POSITION_MOVE_THRESHOLD = 0.5;
 const HISTORY_LIMIT = 8;
 
 // 一定周期でstateを観測 → Jevに質問 → 応答の鮮度/整合性を検証 → 行動実行、を繰り返す。
-export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs } = {}) {
+// homePosition未指定時は、最初に観測できた位置を拠点として自動記録する。
+export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs, homePosition = null } = {}) {
   let stopped = false;
   let lastPosition = null;
   let lastLoggedAction = null;
+  let home = homePosition;
 
   // 停滞watchdog用の状態。
   let sameActionStreak = 0;
@@ -63,7 +65,13 @@ export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs } = {
     if (stopped) return;
 
     try {
-      const state = buildState(bot, { actionHistory });
+      const observedPosition = bot.entity?.position;
+      if (!home && observedPosition) {
+        home = { x: observedPosition.x, y: observedPosition.y, z: observedPosition.z };
+        console.log(`[decisionLoop] 拠点座標を記録しました: (${home.x.toFixed(1)}, ${home.y.toFixed(1)}, ${home.z.toFixed(1)})`);
+      }
+
+      const state = buildState(bot, { actionHistory, homePosition: home });
       const questions = buildQuestions();
       const result = await jevClient.ask(questions, state);
 

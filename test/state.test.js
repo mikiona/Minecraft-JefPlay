@@ -16,24 +16,23 @@ function makeVec3(x, y, z) {
   };
 }
 
-function makeBot() {
+function makeBot({ entities = {}, food = 15, timeOfDay = 6000, items = [] } = {}) {
   const selfEntity = { position: makeVec3(0, 64, 0) };
   return {
     entity: selfEntity,
-    entities: {
-      1: { name: "zombie", position: makeVec3(2, 64, 0) },
-    },
+    entities,
     health: 18,
-    food: 15,
-    time: { timeOfDay: 13000 },
+    food,
+    time: { timeOfDay },
     isRaining: false,
     heldItem: null,
+    inventory: { items: () => items },
     blockAt: () => ({ name: "air", boundingBox: "empty" }),
   };
 }
 
-test("buildStateはterrainとrecentActionsを含む構造を返す", () => {
-  const bot = makeBot();
+test("buildStateはterrain/recentActions/foodStatus/equipmentを含む構造を返す", () => {
+  const bot = makeBot({ entities: { 1: { name: "zombie", position: makeVec3(2, 64, 0) } } });
   const history = [{ action: "idle", result: "ok", timestamp: Date.now() }];
   const state = buildState(bot, { actionHistory: history });
 
@@ -41,8 +40,11 @@ test("buildStateはterrainとrecentActionsを含む構造を返す", () => {
   assert.equal(state.food, 15);
   assert.equal(state.nearbyEntities.length, 1);
   assert.equal(state.nearbyEntities[0].type, "zombie");
+  assert.equal(state.nearbyEntities[0].engageStyle, "melee_ok");
   assert.ok("terrain" in state);
   assert.deepEqual(state.recentActions, history);
+  assert.deepEqual(state.foodStatus, { value: 15, urgent: false, low: true });
+  assert.ok("equipment" in state);
 });
 
 test("actionHistory省略時は空配列になる", () => {
@@ -50,12 +52,45 @@ test("actionHistory省略時は空配列になる", () => {
   assert.deepEqual(state.recentActions, []);
 });
 
-test("buildQuestionsは7つの選択肢を持つchoice質問を1つ返す", () => {
+test("foodStatus.urgentは満腹度6以下でtrueになる", () => {
+  const state = buildState(makeBot({ food: 6 }));
+  assert.equal(state.foodStatus.urgent, true);
+});
+
+test("isNightは夜間tickでtrueになる", () => {
+  const state = buildState(makeBot({ timeOfDay: 18000 }));
+  assert.equal(state.isNight, true);
+});
+
+test("hostileCountとsurroundedByHostilesはneutral_ignoreを除外して計算される", () => {
+  const entities = {
+    1: { name: "zombie", position: makeVec3(1, 64, 0) },
+    2: { name: "skeleton", position: makeVec3(2, 64, 0) },
+    3: { name: "creeper", position: makeVec3(3, 64, 0) },
+    4: { name: "enderman", position: makeVec3(4, 64, 0) }, // neutral_ignoreなので除外
+  };
+  const state = buildState(makeBot({ entities }));
+  assert.equal(state.hostileCount, 3);
+  assert.equal(state.surroundedByHostiles, true);
+});
+
+test("homePositionが渡されるとhomeDistanceが計算される", () => {
+  const state = buildState(makeBot(), { homePosition: { x: 3, y: 64, z: 4 } });
+  assert.equal(state.homeDistance, 5);
+});
+
+test("homePosition未指定ならhomeDistanceはnull", () => {
+  const state = buildState(makeBot());
+  assert.equal(state.homeDistance, null);
+});
+
+test("buildQuestionsは8つの選択肢を持つchoice質問を1つ返す", () => {
   const questions = buildQuestions();
   assert.equal(questions.length, 1);
   const q = questions[0];
   assert.equal(q.type, "choice");
-  assert.equal(Object.keys(q.criteria).length, 7);
+  assert.equal(Object.keys(q.criteria).length, 8);
   assert.ok("mine_nearest_ore" in q.criteria);
   assert.ok("place_block" in q.criteria);
+  assert.ok("return_to_base" in q.criteria);
 });
