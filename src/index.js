@@ -8,6 +8,11 @@ import mineflayer from "mineflayer";
 // 名前付きexportを全て検出できないため、default importから取り出す。
 import pathfinderPkg from "mineflayer-pathfinder";
 const { pathfinder, Movements, goals } = pathfinderPkg;
+// mineflayer-pvpも同様にCommonJSモジュールのため、default importから取り出す。
+// これまでこのロードが漏れており、bot.pvpが常にundefinedのまま
+// attackNearestHostile()の攻撃が無音で失敗していた(戦闘死の主因)。
+import pvpPkg from "mineflayer-pvp";
+const { plugin: pvp } = pvpPkg;
 import { JevClient } from "./jevClient.js";
 import { startDecisionLoop } from "./decisionLoop.js";
 
@@ -28,6 +33,10 @@ const config = {
   actionCooldownMs: process.env.ACTION_COOLDOWN_MS
     ? Number(process.env.ACTION_COOLDOWN_MS)
     : undefined,
+  // このHP以下になったらJevの応答を待たずに即座に緊急離脱する閾値。既定6。
+  emergencyHealthThreshold: process.env.EMERGENCY_HEALTH_THRESHOLD
+    ? Number(process.env.EMERGENCY_HEALTH_THRESHOLD)
+    : undefined,
 };
 
 const bot = mineflayer.createBot({
@@ -38,6 +47,8 @@ const bot = mineflayer.createBot({
 });
 
 bot.loadPlugin(pathfinder);
+// mineflayer-pvpはmineflayer-pathfinderに依存するため、必ず後にロードする。
+bot.loadPlugin(pvp);
 // actions.js から参照するための簡易アクセサ。
 bot.pathfinderGoals = { goals };
 
@@ -78,6 +89,7 @@ bot.once("spawn", () => {
   const loop = startDecisionLoop(bot, jevClient, {
     intervalMs: config.decisionIntervalMs,
     cooldownMs: config.actionCooldownMs,
+    emergencyHealthThreshold: config.emergencyHealthThreshold,
   });
 
   bot.once("end", () => loop.stop());

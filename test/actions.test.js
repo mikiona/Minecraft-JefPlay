@@ -204,3 +204,26 @@ test("return_to_baseはhomePositionへgotoを試みる", async () => {
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls, ["goto"]);
 });
+
+test("attack以外の行動に切り替えるとbot.pvp.forceStopが呼ばれる", async () => {
+  let forceStopCalled = false;
+  const bot = {
+    pathfinder: { setGoal: () => {} },
+    pvp: { forceStop: () => (forceStopCalled = true) },
+  };
+  await executeAction(bot, "idle", {}, {});
+  assert.equal(forceStopCalled, true);
+});
+
+test("attack_nearest_hostile選択時はbot.pvp.forceStopを呼ばない", async () => {
+  let forceStopCalled = false;
+  const bot = {
+    entities: {
+      1: { id: 1, kind: "Hostile mobs", name: "zombie", position: makeVec3(1, 64, 1) },
+    },
+    inventory: { items: () => [] },
+    pvp: { attack: () => {}, forceStop: () => (forceStopCalled = true) },
+  };
+  await executeAction(bot, "attack_nearest_hostile", { nearbyEntities: [] }, {});
+  assert.equal(forceStopCalled, false);
+});

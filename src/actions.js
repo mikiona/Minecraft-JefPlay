@@ -12,6 +12,13 @@ const PATHFINDER_TIMEOUT_MS = 8000;
 // 戻り値は { ok: boolean, reason?: string } に統一する。
 // decisionLoop側で行動履歴(recentActions)の成否記録に使う。
 export async function executeAction(bot, actionName, state, { cooldown } = {}) {
+  // bot.pvp.attack()は一度呼ぶと対象を自動追跡・継続攻撃し続ける仕様のため、
+  // attack以外の行動に切り替える際は明示的に停止しないと、flee等の移動指示と
+  // 裏で競合し続ける(逃げているつもりでも追跡・攻撃が止まらない原因になる)。
+  if (actionName !== "attack_nearest_hostile") {
+    bot.pvp?.forceStop();
+  }
+
   switch (actionName) {
     case "flee":
       return fleeFromNearest(bot, state);

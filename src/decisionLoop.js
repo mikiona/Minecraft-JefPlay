@@ -11,10 +11,17 @@ const STUCK_POSITION_MS = 30000;
 const POSITION_MOVE_THRESHOLD = 0.5;
 // 直近何件の行動履歴をstateに含めてJevに渡すか。
 const HISTORY_LIMIT = 8;
+// このHP以下になったらJevの応答を待たずに即座に緊急離脱(flee)する既定閾値。
+const DEFAULT_EMERGENCY_HEALTH_THRESHOLD = 6;
 
 // 一定周期でstateを観測 → Jevに質問 → 応答の鮮度/整合性を検証 → 行動実行、を繰り返す。
 // homePosition未指定時は、最初に観測できた位置を拠点として自動記録する。
-export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs, homePosition = null } = {}) {
+export function startDecisionLoop(
+  bot,
+  jevClient,
+  { intervalMs, cooldownMs, homePosition = null, emergencyHealthThreshold } = {}
+) {
+  const healthThreshold = emergencyHealthThreshold ?? DEFAULT_EMERGENCY_HEALTH_THRESHOLD;
   let stopped = false;
   let lastPosition = null;
   let lastLoggedAction = null;
@@ -72,6 +79,26 @@ export function startDecisionLoop(bot, jevClient, { intervalMs, cooldownMs, home
       }
 
       const state = buildState(bot, { actionHistory, homePosition: home });
+
+      // 緊急回避: HPが危険域まで下がっている場合、Jev API呼び出しの応答を
+      // 待たず直ちにfleeを実行する。APIレイテンシに関係なく即応するための
+      // ローカルの安全装置(通常フローとは独立に、このtickの先頭で割り込む)。
+      if (bot.health != null && bot.health <= healthThreshold) {
+        console.warn(
+          `[decisionLoop] 緊急回避: HP=${bot.health}が閾値(${healthThreshold})以下のため、Jev応答を待たずfleeを実行します`
+        );
+        let emergencyResult;
+        try {
+          emergencyResult = await executeAction(bot, "flee", state, { cooldown });
+        } catch (err) {
+          emergencyResult = { ok: false, reason: err.message };
+        }
+        recordHistory("flee", emergencyResult?.ok ? "ok" : "failed");
+        checkStuck("flee", state.position);
+        lastPosition = state.position;
+        return;
+      }
+
       const questions = buildQuestions();
       const result = await jevClient.ask(questions, state);
 
