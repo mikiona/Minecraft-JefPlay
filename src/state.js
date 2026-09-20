@@ -15,8 +15,20 @@ const SURROUNDED_THRESHOLD = 3;
 // homePosition: decisionLoop側が起動時に記録した拠点座標({x,y,z} | null)。
 export function buildState(bot, { actionHistory = [], homePosition = null } = {}) {
   const pos = bot.entity?.position;
+  // kind === "Hostile mobs" に限定する。これが無いと、プレイヤー自身や
+  // ドロップアイテム・経験値オーブ・矢なども(minecraft-data上でkindが
+  // "UNKNOWN"扱いのため)nearbyEntitiesに混入し、Jevが「敵性エンティティ」
+  // と誤解して判断を誤る原因になる(実際にitemをattack_nearest_hostileの
+  // 対象と誤認し続ける事例をログで確認した)。
   const nearbyEntities = Object.values(bot.entities)
-    .filter((e) => e !== bot.entity && e.position && pos && e.position.distanceTo(pos) <= NEARBY_RADIUS)
+    .filter(
+      (e) =>
+        e !== bot.entity &&
+        e.kind === "Hostile mobs" &&
+        e.position &&
+        pos &&
+        e.position.distanceTo(pos) <= NEARBY_RADIUS
+    )
     .map((e) => ({
       type: e.name ?? e.username ?? "unknown",
       distance: Number(e.position.distanceTo(pos).toFixed(2)),

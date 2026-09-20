@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { executeAction } from "../src/actions.js";
 import { CooldownTracker } from "../src/cooldown.js";
 
-// mineflayerのVec3相当の簡易モック(offsetメソッドを持つ)。
+// mineflayerのVec3相当の簡易モック(offset/distanceToメソッドを持つ)。
 function makeVec3(x, y, z) {
   return {
     x,
@@ -11,6 +11,9 @@ function makeVec3(x, y, z) {
     z,
     offset(dx, dy, dz) {
       return makeVec3(x + dx, y + dy, z + dz);
+    },
+    distanceTo(other) {
+      return Math.sqrt((x - other.x) ** 2 + (y - other.y) ** 2 + (z - other.z) ** 2);
     },
   };
 }
@@ -226,4 +229,57 @@ test("attack_nearest_hostile選択時はbot.pvp.forceStopを呼ばない", async
   };
   await executeAction(bot, "attack_nearest_hostile", { nearbyEntities: [] }, {});
   assert.equal(forceStopCalled, false);
+});
+
+test("fleeは脅威の座標から遠ざかる方向へ移動する", async () => {
+  let goalSet = null;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "zombie", position: makeVec3(5, 64, 0) }, // 東側に脅威
+    },
+    pathfinderGoals: {
+      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
+    },
+    pathfinder: { setGoal: () => {} },
+  };
+  const state = {
+    terrain: { samples: { north: ["clear"], south: ["clear"], east: ["clear"], west: ["clear"] } },
+  };
+  const result = await executeAction(bot, "flee", state, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.detail.direction, "west");
+  assert.ok(goalSet.x < 0, "西(x負方向)へ逃げるゴールが設定されるべき");
+});
+
+test("fleeはneutral_ignore(エンダーマン)を脅威として扱わない", async () => {
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "enderman", position: makeVec3(5, 64, 0) },
+    },
+  };
+  const result = await executeAction(bot, "flee", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_target" });
+});
+
+test("fleeは脅威から遠ざかる方向が地形的に危険なら、他の安全な方向を選ぶ", async () => {
+  let goalSet = null;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "zombie", position: makeVec3(5, 64, 0) }, // 東に脅威 -> 遠ざかる方向は西
+    },
+    pathfinderGoals: {
+      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
+    },
+    pathfinder: { setGoal: () => {} },
+  };
+  // 西(west)だけhazardにして、遠ざかる方向を選べないようにする。
+  const state = {
+    terrain: { samples: { north: ["clear"], south: ["clear"], east: ["clear"], west: ["hazard"] } },
+  };
+  const result = await executeAction(bot, "flee", state, {});
+  assert.equal(result.ok, true);
+  assert.notEqual(result.detail.direction, "west");
 });

@@ -32,7 +32,9 @@ function makeBot({ entities = {}, food = 15, timeOfDay = 6000, items = [] } = {}
 }
 
 test("buildStateはterrain/recentActions/foodStatus/equipmentを含む構造を返す", () => {
-  const bot = makeBot({ entities: { 1: { name: "zombie", position: makeVec3(2, 64, 0) } } });
+  const bot = makeBot({
+    entities: { 1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(2, 64, 0) } },
+  });
   const history = [{ action: "idle", result: "ok", timestamp: Date.now() }];
   const state = buildState(bot, { actionHistory: history });
 
@@ -64,14 +66,26 @@ test("isNightは夜間tickでtrueになる", () => {
 
 test("hostileCountとsurroundedByHostilesはneutral_ignoreを除外して計算される", () => {
   const entities = {
-    1: { name: "zombie", position: makeVec3(1, 64, 0) },
-    2: { name: "skeleton", position: makeVec3(2, 64, 0) },
-    3: { name: "creeper", position: makeVec3(3, 64, 0) },
-    4: { name: "enderman", position: makeVec3(4, 64, 0) }, // neutral_ignoreなので除外
+    1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(1, 64, 0) },
+    2: { name: "skeleton", kind: "Hostile mobs", position: makeVec3(2, 64, 0) },
+    3: { name: "creeper", kind: "Hostile mobs", position: makeVec3(3, 64, 0) },
+    4: { name: "enderman", kind: "Hostile mobs", position: makeVec3(4, 64, 0) }, // neutral_ignoreなので除外
   };
   const state = buildState(makeBot({ entities }));
   assert.equal(state.hostileCount, 3);
   assert.equal(state.surroundedByHostiles, true);
+});
+
+test("nearbyEntitiesはkindがHostile mobs以外(プレイヤー/アイテム等)を除外する", () => {
+  const entities = {
+    1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(1, 64, 0) },
+    2: { name: "player", kind: "UNKNOWN", position: makeVec3(2, 64, 0) },
+    3: { name: "item", kind: "UNKNOWN", position: makeVec3(3, 64, 0) },
+    4: { name: "arrow", kind: "Projectiles", position: makeVec3(4, 64, 0) },
+  };
+  const state = buildState(makeBot({ entities }));
+  assert.equal(state.nearbyEntities.length, 1);
+  assert.equal(state.nearbyEntities[0].type, "zombie");
 });
 
 test("homePositionが渡されるとhomeDistanceが計算される", () => {

@@ -15,6 +15,7 @@ import pvpPkg from "mineflayer-pvp";
 const { plugin: pvp } = pvpPkg;
 import { JevClient } from "./jevClient.js";
 import { startDecisionLoop } from "./decisionLoop.js";
+import { DecisionLogger } from "./logger.js";
 
 const config = {
   host: process.env.MC_HOST ?? "localhost",
@@ -37,6 +38,9 @@ const config = {
   emergencyHealthThreshold: process.env.EMERGENCY_HEALTH_THRESHOLD
     ? Number(process.env.EMERGENCY_HEALTH_THRESHOLD)
     : undefined,
+  // tickごとの詳細な状況・判断・実行結果をJSON Lines形式で書き出すログファイル。
+  // 空文字を指定するとログ出力を無効化できる。既定でlogs/decision.jsonlに出力する。
+  logFilePath: process.env.LOG_FILE_PATH === "" ? null : process.env.LOG_FILE_PATH || "logs/decision.jsonl",
 };
 
 const bot = mineflayer.createBot({
@@ -86,10 +90,24 @@ bot.once("spawn", () => {
   }
 
   console.log(`[index] ${config.username} spawned. decision loop starting...`);
+  if (config.logFilePath) {
+    console.log(`[index] 詳細ログを ${config.logFilePath} に出力します(JSON Lines形式)`);
+  }
+  const logger = new DecisionLogger({ filePath: config.logFilePath });
+
+  // 死亡はHPが0になった瞬間ではなく専用イベントとして発火する。
+  // ログ上でHPが急に20へ戻る=死亡&自動リスポーンだったと後から推測する
+  // 必要が無いよう、死亡そのものを明示的に記録する。
+  bot.on("death", () => {
+    console.warn("[index] botが死亡しました(自動リスポーンします)");
+    logger.log({ mode: "event", event: "death", position: bot.entity?.position ?? null });
+  });
+
   const loop = startDecisionLoop(bot, jevClient, {
     intervalMs: config.decisionIntervalMs,
     cooldownMs: config.actionCooldownMs,
     emergencyHealthThreshold: config.emergencyHealthThreshold,
+    logger,
   });
 
   bot.once("end", () => loop.stop());

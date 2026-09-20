@@ -41,23 +41,34 @@ export async function executeAction(bot, actionName, state, { cooldown } = {}) {
   }
 }
 
-function nearestEntity(bot, state) {
-  if (!state.nearbyEntities.length) return null;
-  const sorted = [...state.nearbyEntities].sort((a, b) => a.distance - b.distance);
-  return sorted[0];
+// state.nearbyEntitiesは位置を持たないため、実座標が必要な処理(flee等)では
+// bot.entitiesから直接、最寄りの脅威(neutral_ignore以外)を探して返す。
+function nearestThreatEntity(bot) {
+  const pos = bot.entity?.position;
+  if (!pos) return null;
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const e of Object.values(bot.entities)) {
+    if (e === bot.entity || !e.position) continue;
+    if (classifyMob(e.name) === "neutral_ignore") continue;
+    const dist = pos.distanceTo(e.position);
+    if (dist < nearestDist) {
+      nearest = e;
+      nearestDist = dist;
+    }
+  }
+  return nearest ? { entity: nearest, distance: nearestDist } : null;
 }
 
 // 地形サンプル(terrain.samples)を参照し、hazard/drop_or_no_floorを含まない
-// 安全な方向を返す。取得できなければnullを返し、呼び出し側でランダムに
-// フォールバックする。
-function safestDirection(state) {
+// 安全な方向の一覧を返す。地形情報が無ければnullを返す。
+function safeDirections(state) {
   const samples = state.terrain?.samples;
   if (!samples) return null;
   const safeDirs = Object.entries(samples)
     .filter(([, classes]) => classes.every((c) => c !== "hazard" && c !== "drop_or_no_floor"))
     .map(([name]) => name);
-  if (!safeDirs.length) return null;
-  return safeDirs[Math.floor(Math.random() * safeDirs.length)];
+  return safeDirs.length ? safeDirs : null;
 }
 
 const DIRECTION_VECTORS = {
@@ -67,20 +78,56 @@ const DIRECTION_VECTORS = {
   west: { dx: -1, dz: 0 },
 };
 
-function fleeFromNearest(bot, state) {
-  const target = nearestEntity(bot, state);
-  if (!target || !bot.entity?.position) return { ok: false, reason: "no_target" };
+// 脅威の位置から見て自分がいる方向(=脅威から遠ざかる方向)に最も近い
+// DIRECTION_VECTORSのキーを返す(内積が最大になる方向)。
+function directionAwayFrom(selfPos, threatPos) {
+  const dx = selfPos.x - threatPos.x;
+  const dz = selfPos.z - threatPos.z;
+  const len = Math.sqrt(dx * dx + dz * dz) || 1;
+  const nx = dx / len;
+  const nz = dz / len;
 
-  const dir = safestDirection(state);
-  let away;
-  if (dir) {
-    const v = DIRECTION_VECTORS[dir];
-    away = bot.entity.position.offset(v.dx * 10, 0, v.dz * 10);
-  } else {
-    away = bot.entity.position.offset((Math.random() - 0.5) * 10, 0, (Math.random() - 0.5) * 10);
+  let best = null;
+  let bestScore = -Infinity;
+  for (const [name, v] of Object.entries(DIRECTION_VECTORS)) {
+    const score = v.dx * nx + v.dz * nz;
+    if (score > bestScore) {
+      best = name;
+      bestScore = score;
+    }
   }
+  return best;
+}
+
+function fleeFromNearest(bot, state) {
+  const threat = nearestThreatEntity(bot);
+  if (!threat || !bot.entity?.position) return { ok: false, reason: "no_target" };
+
+  const safeDirs = safeDirections(state);
+  const awayDir = directionAwayFrom(bot.entity.position, threat.entity.position);
+
+  // 脅威から遠ざかる方向が地形的にも安全ならそれを優先する。
+  // 安全でなければ、他の安全な方向の中から選ぶ。それも無ければ
+  // 危険を承知で脅威から遠ざかる方向を選ぶ(地形不明時のフォールバック)。
+  let dir;
+  if (!safeDirs || safeDirs.includes(awayDir)) {
+    dir = awayDir;
+  } else {
+    dir = safeDirs[Math.floor(Math.random() * safeDirs.length)];
+  }
+
+  const v = DIRECTION_VECTORS[dir];
+  const away = bot.entity.position.offset(v.dx * 12, 0, v.dz * 12);
   moveTo(bot, away);
-  return { ok: true };
+  return {
+    ok: true,
+    detail: {
+      threatType: threat.entity.name,
+      threatDistance: Number(threat.distance.toFixed(2)),
+      direction: dir,
+      target: { x: away.x, y: away.y, z: away.z },
+    },
+  };
 }
 
 function attackNearestHostile(bot, state, cooldown) {
@@ -118,7 +165,8 @@ async function eatIfPossible(bot) {
 function exploreRandomly(bot, state) {
   if (!bot.entity?.position) return { ok: false, reason: "no_position" };
 
-  const dir = state ? safestDirection(state) : null;
+  const safeDirs = state ? safeDirections(state) : null;
+  const dir = safeDirs ? safeDirs[Math.floor(Math.random() * safeDirs.length)] : null;
   let target;
   if (dir) {
     const v = DIRECTION_VECTORS[dir];
@@ -127,7 +175,7 @@ function exploreRandomly(bot, state) {
     target = bot.entity.position.offset((Math.random() - 0.5) * 20, 0, (Math.random() - 0.5) * 20);
   }
   moveTo(bot, target);
-  return { ok: true };
+  return { ok: true, detail: { direction: dir, target: { x: target.x, y: target.y, z: target.z } } };
 }
 
 // エイム(対象鉱石ブロック選定)→装備(適切なpickaxe)→採掘、の順で実行する。

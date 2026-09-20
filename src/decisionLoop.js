@@ -2,6 +2,7 @@ import { buildState, buildQuestions } from "./state.js";
 import { executeAction } from "./actions.js";
 import { JevFatalError } from "./jevClient.js";
 import { CooldownTracker } from "./cooldown.js";
+import { DecisionLogger } from "./logger.js";
 
 // 同一actionがこのtick数以上連続したら停滞とみなし警告する(既定: 250ms×120=30秒相当)。
 const STUCK_ACTION_TICKS = 120;
@@ -16,12 +17,15 @@ const DEFAULT_EMERGENCY_HEALTH_THRESHOLD = 6;
 
 // 一定周期でstateを観測 → Jevに質問 → 応答の鮮度/整合性を検証 → 行動実行、を繰り返す。
 // homePosition未指定時は、最初に観測できた位置を拠点として自動記録する。
+// logger(DecisionLoggerインスタンス)を渡すと、tickごとの詳細な状況・判断・
+// 実行結果をJSON Lines形式でファイルに残す(未指定なら記録しない)。
 export function startDecisionLoop(
   bot,
   jevClient,
-  { intervalMs, cooldownMs, homePosition = null, emergencyHealthThreshold } = {}
+  { intervalMs, cooldownMs, homePosition = null, emergencyHealthThreshold, logger } = {}
 ) {
   const healthThreshold = emergencyHealthThreshold ?? DEFAULT_EMERGENCY_HEALTH_THRESHOLD;
+  const decisionLogger = logger ?? new DecisionLogger();
   let stopped = false;
   let lastPosition = null;
   let lastLoggedAction = null;
@@ -68,6 +72,26 @@ export function startDecisionLoop(
     lastCheckedPosition = position;
   };
 
+  // stateと実行結果から、診断に必要な情報をまとめてログファイルに書き出す。
+  // mode: "emergency"(緊急回避) | "normal"(通常のJev判断フロー)
+  const logDecision = (mode, state, action, actionResult, extra = {}) => {
+    decisionLogger.log({
+      mode,
+      health: state.health,
+      food: state.food,
+      position: state.position,
+      isNight: state.isNight,
+      nearbyEntities: state.nearbyEntities,
+      hostileCount: state.hostileCount,
+      surroundedByHostiles: state.surroundedByHostiles,
+      terrainSafe: state.terrain?.isSafe ?? null,
+      homeDistance: state.homeDistance,
+      action,
+      actionResult,
+      ...extra,
+    });
+  };
+
   const tick = async () => {
     if (stopped) return;
 
@@ -95,6 +119,7 @@ export function startDecisionLoop(
         }
         recordHistory("flee", emergencyResult?.ok ? "ok" : "failed");
         checkStuck("flee", state.position);
+        logDecision("emergency", state, "flee", emergencyResult);
         lastPosition = state.position;
         return;
       }
@@ -104,11 +129,13 @@ export function startDecisionLoop(
 
       if (!jevClient.isFresh(result)) {
         console.warn("[decisionLoop] stale response, skipping");
+        logDecision("normal", state, null, null, { skipped: "stale_response" });
         return;
       }
 
       if (!positionPlausible(lastPosition, state.position)) {
         console.warn("[decisionLoop] position jumped unexpectedly, skipping action");
+        logDecision("normal", state, null, null, { skipped: "position_jump" });
       } else {
         const nextAction = result.answers.find((a) => a.id === "next_action");
         if (nextAction?.value) {
@@ -127,6 +154,10 @@ export function startDecisionLoop(
           }
           recordHistory(nextAction.value, actionResult?.ok ? "ok" : "failed");
           checkStuck(nextAction.value, state.position);
+          logDecision("normal", state, nextAction.value, actionResult, {
+            confidence: nextAction.confidence,
+            source: result.source,
+          });
         }
       }
 
