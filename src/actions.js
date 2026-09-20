@@ -1,6 +1,6 @@
 // Jevの回答(Choice)をMineflayerのAPI呼び出しにマッピングする。
 import { Vec3 } from "vec3";
-import { classifyMob, selectBestFood, selectBestByTier, evaluateOreYFitness } from "./mobKnowledge.js";
+import { classifyMob, selectBestFood, selectBestByTier, evaluateOreYFitness, isHuntableAnimal } from "./mobKnowledge.js";
 
 // 採掘対象とみなす鉱石ブロック名(石系・ネザー系を含む代表的なもの)。
 const ORE_PATTERN = /(coal|iron|copper|gold|diamond|redstone|lapis|emerald)_ore$/;
@@ -12,14 +12,22 @@ const PATHFINDER_TIMEOUT_MS = 8000;
 // これが無いと50ブロック先のクモ等にまで反応し、無意味な方向へ逃げ続ける
 // (実機で確認: 水面浮上の瞬間に遠方の脅威を検出しescape_waterと交互発動)。
 const THREAT_DETECTION_RADIUS = 8;
+// 食料になる動物(牛/豚/鶏/羊/うさぎ)を探す最大距離。戦闘の脅威より
+// 少し広めにし、mine_nearest_oreのmaxDistanceと合わせている。
+const FOOD_SEARCH_RADIUS = 16;
+
+// bot.pvp.attack()を使う継続的な攻撃系行動。これらの間で切り替える際は
+// forceStopしない(連続攻撃の途中でリセットしてしまうため)。
+const ATTACK_ACTIONS = new Set(["attack_nearest_hostile", "hunt_animal"]);
 
 // 戻り値は { ok: boolean, reason?: string } に統一する。
 // decisionLoop側で行動履歴(recentActions)の成否記録に使う。
 export async function executeAction(bot, actionName, state, { cooldown, previousEscapeDirection } = {}) {
   // bot.pvp.attack()は一度呼ぶと対象を自動追跡・継続攻撃し続ける仕様のため、
-  // attack以外の行動に切り替える際は明示的に停止しないと、flee等の移動指示と
-  // 裏で競合し続ける(逃げているつもりでも追跡・攻撃が止まらない原因になる)。
-  if (actionName !== "attack_nearest_hostile") {
+  // attack系以外の行動に切り替える際は明示的に停止しないと、flee等の移動
+  // 指示と裏で競合し続ける(逃げているつもりでも追跡・攻撃が止まらない
+  // 原因になる)。
+  if (!ATTACK_ACTIONS.has(actionName)) {
     bot.pvp?.forceStop();
   }
 
@@ -28,6 +36,8 @@ export async function executeAction(bot, actionName, state, { cooldown, previous
       return fleeFromNearest(bot, state);
     case "attack_nearest_hostile":
       return attackNearestHostile(bot, state, cooldown);
+    case "hunt_animal":
+      return huntAnimal(bot, cooldown);
     case "eat":
       return eatIfPossible(bot);
     case "explore":
@@ -169,6 +179,36 @@ function attackNearestHostile(bot, state, cooldown) {
     if (sword) bot.equip?.(sword, "hand");
     bot.pvp?.attack(target);
     return { ok: true };
+  } catch (err) {
+    cooldown?.markFailed(entityKey(target));
+    return { ok: false, reason: err.message };
+  }
+}
+
+// 食料源となる動物(牛/豚/鶏/羊/うさぎ)を狩る。倒すと生肉がドロップし、
+// eatIfPossible()で消費できるようになる。攻撃はattackNearestHostileと
+// 同様にmineflayer-pvpの自動追跡・連続攻撃に任せる。
+function huntAnimal(bot, cooldown) {
+  const pos = bot.entity?.position;
+  let target = null;
+  let targetDist = Infinity;
+  for (const e of Object.values(bot.entities)) {
+    if (!e.position || cooldown?.isOnCooldown(entityKey(e))) continue;
+    if (!isHuntableAnimal(e.name)) continue;
+    const dist = pos ? pos.distanceTo(e.position) : 0;
+    if (dist > FOOD_SEARCH_RADIUS) continue;
+    if (dist < targetDist) {
+      target = e;
+      targetDist = dist;
+    }
+  }
+  if (!target) return { ok: false, reason: "no_target" };
+
+  try {
+    const sword = selectBestByTier(bot.inventory?.items() ?? [], "_sword");
+    if (sword) bot.equip?.(sword, "hand");
+    bot.pvp?.attack(target);
+    return { ok: true, detail: { targetType: target.name, distance: Number(targetDist.toFixed(2)) } };
   } catch (err) {
     cooldown?.markFailed(entityKey(target));
     return { ok: false, reason: err.message };

@@ -358,3 +358,59 @@ test("escape_waterは全方向waterでも停止せず、水が最も少ない方
   assert.equal(jumpState, true);
   assert.ok(goalSet, "水しかなくても必ずgotoを試みるべき");
 });
+
+test("hunt_animalは食料になる動物が無ければno_targetを返す", async () => {
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "cat", position: makeVec3(1, 64, 1) }, // 食料にならない
+    },
+    inventory: { items: () => [] },
+  };
+  const result = await executeAction(bot, "hunt_animal", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_target" });
+});
+
+test("hunt_animalは最寄りの食料動物を狙い、剣を装備してから攻撃する", async () => {
+  const calls = [];
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "cow", position: makeVec3(10, 64, 0) },
+      2: { name: "pig", position: makeVec3(3, 64, 0) }, // より近い
+    },
+    inventory: { items: () => [{ name: "iron_sword" }] },
+    equip: (item) => calls.push(`equip:${item.name}`),
+    pvp: { attack: (target) => calls.push(`attack:${target.name}`) },
+  };
+  const result = await executeAction(bot, "hunt_animal", {}, {});
+  assert.equal(result.ok, true);
+  assert.equal(result.detail.targetType, "pig");
+  assert.deepEqual(calls, ["equip:iron_sword", "attack:pig"]);
+});
+
+test("hunt_animalは検出範囲外の動物を対象にしない", async () => {
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "cow", position: makeVec3(30, 64, 0) }, // FOOD_SEARCH_RADIUS(16)超え
+    },
+    inventory: { items: () => [] },
+  };
+  const result = await executeAction(bot, "hunt_animal", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_target" });
+});
+
+test("hunt_animalからattack_nearest_hostileへの切り替えではforceStopしない", async () => {
+  let forceStopCalled = false;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    entities: {
+      1: { name: "cow", position: makeVec3(3, 64, 0) },
+    },
+    inventory: { items: () => [] },
+    pvp: { attack: () => {}, forceStop: () => (forceStopCalled = true) },
+  };
+  await executeAction(bot, "hunt_animal", {}, {});
+  assert.equal(forceStopCalled, false);
+});

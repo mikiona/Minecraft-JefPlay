@@ -1,9 +1,11 @@
 // bot周辺のブロック/エンティティ/プレイヤー状態を構造化し、
 // Jevに投げる質問(questions)を組み立てる。
 import { sampleTerrain } from "./terrain.js";
-import { classifyMob, isNightTime, selectBestByTier, selectBestFood } from "./mobKnowledge.js";
+import { classifyMob, isNightTime, selectBestByTier, selectBestFood, isHuntableAnimal } from "./mobKnowledge.js";
 
 const NEARBY_RADIUS = 8;
+// 食料になる動物の探索範囲。actions.jsのFOOD_SEARCH_RADIUSと合わせる。
+const ANIMAL_SEARCH_RADIUS = 16;
 // 満腹度がこの値以下だとダッシュ不可(Minecraft仕様)。最優先で食事すべき閾値。
 const FOOD_URGENT_THRESHOLD = 6;
 // 満腹度がこの値以下なら、機会があれば食事すべき閾値。
@@ -36,6 +38,23 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
     }));
 
   const hostileCount = nearbyEntities.filter((e) => e.engageStyle !== "neutral_ignore").length;
+
+  // 食料源になる動物(牛/豚/鶏/羊/うさぎ)。所持食料が無い場合にhunt_animalを
+  // 選ぶ判断材料として、通常の脅威検出より広い範囲で観測する。
+  const nearbyAnimals = Object.values(bot.entities)
+    .filter(
+      (e) =>
+        e !== bot.entity &&
+        isHuntableAnimal(e.name) &&
+        e.position &&
+        pos &&
+        e.position.distanceTo(pos) <= ANIMAL_SEARCH_RADIUS
+    )
+    .map((e) => ({
+      type: e.name,
+      distance: Number(e.position.distanceTo(pos).toFixed(2)),
+    }));
+
   const items = bot.inventory?.items() ?? [];
 
   return {
@@ -58,6 +77,7 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
     nearbyEntities,
     hostileCount,
     surroundedByHostiles: hostileCount >= SURROUNDED_THRESHOLD,
+    nearbyAnimals,
     heldItem: bot.heldItem?.name ?? null,
     equipment: {
       heldItem: bot.heldItem?.name ?? null,
@@ -94,9 +114,9 @@ export function buildQuestions() {
       id: "next_action",
       type: "choice",
       instructions:
-        "現在の状況(HP/満腹度と食料の所持有無/周辺の敵性エンティティとその種別/夜間かどうか/装備/" +
-        "直近の行動履歴/周辺地形の安全性/拠点からの距離)に最も適した行動を選んでください。" +
-        "地形が安全でない場合は移動を伴う行動を避けてください。" +
+        "現在の状況(HP/満腹度と食料の所持有無/周辺の敵性エンティティとその種別/周辺の動物とその距離/" +
+        "夜間かどうか/装備/直近の行動履歴/周辺地形の安全性/拠点からの距離)に最も適した行動を選んで" +
+        "ください。地形が安全でない場合は移動を伴う行動を避けてください。" +
         "同じ行動を実行しても状況(HP/満腹度/位置など)が変化しない場合、その行動は効果が無いか" +
         "失敗しているとみなし、他の行動に切り替えるべきです。",
       criteria: {
@@ -110,10 +130,13 @@ export function buildQuestions() {
         attack_nearest_hostile:
           "体力が15以上に余裕があり、近くに敵性エンティティ(クリーパー・エンダーマンを除く)が" +
           "1〜2体のみいる場合。剣を装備できるとなお良い。体力が低下してきたら戦闘を継続せずfleeに切り替えるべき",
+        hunt_animal:
+          "食料を所持しておらず(または満腹度が低く)、周辺に食料源の動物(牛/豚/鶏/羊/うさぎ)がいる場合。" +
+          "動物を倒すと生肉がドロップし、それをeatで消費できるようになる",
         eat:
           "満腹度が17以下で、食料を所持しており、脅威が近くにない場合。満腹度が6以下の場合は最優先で行うこと。" +
-          "食料を所持していない場合はeatを選ばず、代わりにexploreで食料源(動物等)を探すか、" +
-          "他の行動を選ぶこと",
+          "食料を所持していない場合はeatを選ばず、近くに動物がいればhunt_animalを、いなければexploreで" +
+          "動物を探すこと",
         mine_nearest_ore:
           "周辺に採掘可能な鉱石があり、そのY座標が対象鉱石に適しており" +
           "(石炭はY136付近、鉄はY16付近、ダイヤ・レッドストーンはY-58付近)、" +

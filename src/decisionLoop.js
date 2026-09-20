@@ -88,6 +88,8 @@ export function startDecisionLoop(
       nearbyEntities: state.nearbyEntities,
       hostileCount: state.hostileCount,
       surroundedByHostiles: state.surroundedByHostiles,
+      nearbyAnimals: state.nearbyAnimals,
+      hasFood: state.foodStatus?.hasFood,
       terrainSafe: state.terrain?.isSafe ?? null,
       homeDistance: state.homeDistance,
       action,
@@ -134,10 +136,13 @@ export function startDecisionLoop(
       // リセットする。
       lastWaterEscapeDirection = null;
 
-      // 緊急回避: HPが危険域まで下がっている場合、Jev API呼び出しの応答を
-      // 待たず直ちにfleeを実行する。APIレイテンシに関係なく即応するための
-      // ローカルの安全装置(通常フローとは独立に、このtickの先頭で割り込む)。
-      if (bot.health != null && bot.health <= healthThreshold) {
+      // 緊急回避: HPが危険域まで下がっており、かつ実際に近くに脅威がいる
+      // 場合のみ、Jev API呼び出しの応答を待たず直ちにfleeを実行する。
+      // 脅威チェックが無いと、脅威がいなくてHPが低いだけの状況(例: 食料
+      // 切れで回復できない)でも無意味なfleeを永久に繰り返し、Jevの通常
+      // 判断(hunt_animal等の回復手段)に一切到達できなくなる不具合が
+      // 実機で発生したため、脅威の有無を条件に加えた。
+      if (bot.health != null && bot.health <= healthThreshold && state.hostileCount > 0) {
         console.warn(
           `[decisionLoop] 緊急回避: HP=${bot.health}が閾値(${healthThreshold})以下のため、Jev応答を待たずfleeを実行します`
         );

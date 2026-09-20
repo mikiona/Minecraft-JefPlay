@@ -114,13 +114,26 @@ test("homePosition未指定ならhomeDistanceはnull", () => {
   assert.equal(state.homeDistance, null);
 });
 
-test("buildQuestionsは8つの選択肢を持つchoice質問を1つ返す", () => {
+test("buildQuestionsは9つの選択肢を持つchoice質問を1つ返す", () => {
   const questions = buildQuestions();
   assert.equal(questions.length, 1);
   const q = questions[0];
   assert.equal(q.type, "choice");
-  assert.equal(Object.keys(q.criteria).length, 8);
+  assert.equal(Object.keys(q.criteria).length, 9);
   assert.ok("mine_nearest_ore" in q.criteria);
   assert.ok("place_block" in q.criteria);
   assert.ok("return_to_base" in q.criteria);
+  assert.ok("hunt_animal" in q.criteria);
+});
+
+test("nearbyAnimalsは食料になる動物のみを距離付きで返す", () => {
+  const entities = {
+    1: { name: "cow", kind: "Passive mobs", position: makeVec3(3, 64, 0) },
+    2: { name: "cat", kind: "Passive mobs", position: makeVec3(2, 64, 0) }, // 食料にならないので除外
+    3: { name: "zombie", kind: "Hostile mobs", position: makeVec3(1, 64, 0) },
+  };
+  const state = buildState(makeBot({ entities }));
+  assert.equal(state.nearbyAnimals.length, 1);
+  assert.equal(state.nearbyAnimals[0].type, "cow");
+  assert.equal(state.nearbyAnimals[0].distance, 3);
 });

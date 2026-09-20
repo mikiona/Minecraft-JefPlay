@@ -16,10 +16,10 @@ function makeVec3(x, y, z) {
   };
 }
 
-function makeBot({ health = 20 } = {}) {
+function makeBot({ health = 20, entities = {} } = {}) {
   return {
     entity: { position: makeVec3(0, 64, 0) },
-    entities: {},
+    entities,
     health,
     food: 20,
     time: { timeOfDay: 6000 },
@@ -41,9 +41,12 @@ function makeJevClient(askImpl) {
   };
 }
 
-test("HPが緊急閾値以下のときはJev APIを呼ばずfleeを実行する", async () => {
+test("HPが緊急閾値以下かつ近くに脅威がいるときはJev APIを呼ばずfleeを実行する", async () => {
   let askCalled = false;
-  const bot = makeBot({ health: 4 });
+  const bot = makeBot({
+    health: 4,
+    entities: { 1: { name: "zombie", kind: "Hostile mobs", position: makeVec3(1, 64, 0) } },
+  });
   const jevClient = makeJevClient(async () => {
     askCalled = true;
     return { answers: [], source: "mock", receivedAt: Date.now() };
@@ -55,6 +58,21 @@ test("HPが緊急閾値以下のときはJev APIを呼ばずfleeを実行する"
   loop.stop();
 
   assert.equal(askCalled, false);
+});
+
+test("HPが緊急閾値以下でも近くに脅威がいなければJev APIを呼ぶ(食料切れ等からの回復手段を選べるようにするため)", async () => {
+  let askCalled = false;
+  const bot = makeBot({ health: 4 }); // entities省略 = 脅威なし
+  const jevClient = makeJevClient(async () => {
+    askCalled = true;
+    return { answers: [], source: "mock", receivedAt: Date.now() };
+  });
+
+  const loop = startDecisionLoop(bot, jevClient, { intervalMs: 10, emergencyHealthThreshold: 6 });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  loop.stop();
+
+  assert.equal(askCalled, true);
 });
 
 test("HPが閾値より高いときは通常通りJev APIを呼ぶ", async () => {

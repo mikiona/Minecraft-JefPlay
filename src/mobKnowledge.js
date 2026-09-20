@@ -17,6 +17,14 @@ export function classifyMob(name) {
   return HOSTILE_MOB_PROFILES[name]?.engageStyle ?? "melee_ok";
 }
 
+// 倒すと食料(生肉)がドロップする動物(Passive mobs)。
+// 猫/犬/馬/狐等、食料源にならない動物は含めない。
+export const HUNTABLE_ANIMALS = new Set(["cow", "pig", "chicken", "sheep", "rabbit"]);
+
+export function isHuntableAnimal(name) {
+  return HUNTABLE_ANIMALS.has(name);
+}
+
 // 食料: 調理済みを優先(満腹度回復量が高いため)。生食料は次点。
 const COOKED_FOOD_PATTERN =
   /^(cooked_beef|cooked_porkchop|cooked_chicken|cooked_mutton|cooked_rabbit|bread|baked_potato|golden_apple)$/;

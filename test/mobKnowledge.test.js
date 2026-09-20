@@ -6,6 +6,7 @@ import {
   selectBestByTier,
   evaluateOreYFitness,
   isNightTime,
+  isHuntableAnimal,
 } from "../src/mobKnowledge.js";
 
 test("classifyMobは既知のMobを正しく分類する", () => {
@@ -50,6 +51,17 @@ test("evaluateOreYFitnessは最適Yで最高スコアを返す", () => {
 
 test("evaluateOreYFitnessは範囲外で0を返す", () => {
   assert.equal(evaluateOreYFitness("diamond_ore", 200), 0);
+});
+
+test("isHuntableAnimalは食料になる動物を正しく判定する", () => {
+  assert.equal(isHuntableAnimal("cow"), true);
+  assert.equal(isHuntableAnimal("pig"), true);
+  assert.equal(isHuntableAnimal("chicken"), true);
+  assert.equal(isHuntableAnimal("sheep"), true);
+  assert.equal(isHuntableAnimal("rabbit"), true);
+  assert.equal(isHuntableAnimal("cat"), false);
+  assert.equal(isHuntableAnimal("wolf"), false);
+  assert.equal(isHuntableAnimal("zombie"), false);
 });
 
 test("isNightTimeは夜間tickを正しく判定する", () => {
