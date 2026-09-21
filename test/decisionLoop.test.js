@@ -89,3 +89,29 @@ test("HPが閾値より高いときは通常通りJev APIを呼ぶ", async () =>
 
   assert.equal(askCalled, true);
 });
+
+test("前回のtickが完了する前に次のtickは開始しない(長時間行動の二重実行防止)", async () => {
+  const bot = makeBot({ health: 20 });
+  let concurrentCalls = 0;
+  let maxConcurrentCalls = 0;
+  let totalCalls = 0;
+
+  const jevClient = makeJevClient(async () => {
+    concurrentCalls++;
+    maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls);
+    totalCalls++;
+    // chop_wood等の長時間行動(pathfinding+採掘)をシミュレートする。
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    concurrentCalls--;
+    return { answers: [], source: "mock", receivedAt: Date.now() };
+  });
+
+  // intervalMsを処理時間より大幅に短くし、setIntervalが前回未完了でも
+  // 次のtickを呼ぼうとする状況を作る。
+  const loop = startDecisionLoop(bot, jevClient, { intervalMs: 10, emergencyHealthThreshold: 6 });
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  loop.stop();
+
+  assert.equal(maxConcurrentCalls, 1, "同時に複数のtickが実行されてはいけない");
+  assert.ok(totalCalls >= 2, "tick自体は完了ごとに繰り返し実行されるべき");
+});

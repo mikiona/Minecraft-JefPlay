@@ -510,10 +510,44 @@ test("craft_itemは作業台が必要なアイテムで、近くに作業台が�
   assert.ok(calls.includes("craft:recipe:1:true"));
 });
 
-test("smelt_itemはかまどが無ければno_furnaceを返す", async () => {
-  const bot = { findBlock: () => null };
+test("smelt_itemはかまども所持アイテムも無ければno_furnaceを返す", async () => {
+  const bot = { findBlock: () => null, inventory: { items: () => [] } };
   const result = await executeAction(bot, "smelt_item", {}, {});
   assert.deepEqual(result, { ok: false, reason: "no_furnace" });
+});
+
+test("smelt_itemはかまどが無くても所持していれば足元付近に設置する", async () => {
+  const calls = [];
+  const groundBlock = { name: "grass_block", boundingBox: "block", position: { x: 1, y: 63, z: 0 } };
+  const airAbove = { boundingBox: "empty" };
+  const placedFurnace = { name: "furnace", position: { x: 1, y: 64, z: 0 } };
+  let findBlockCallCount = 0;
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    inventory: { items: () => [{ name: "furnace", count: 1 }] },
+    findBlock: ({ matching }) => {
+      findBlockCallCount++;
+      if (findBlockCallCount === 1) return null; // 最初は近くにかまど無し
+      return matching(placedFurnace) ? placedFurnace : null; // 設置後は見つかる
+    },
+    blockAt: (pos) => {
+      // east(x+1)方向の足元はgrass、その上は空気。
+      if (pos.x === 1 && pos.y === 63 && pos.z === 0) return groundBlock;
+      if (pos.x === 1 && pos.y === 64 && pos.z === 0) return airAbove;
+      return { boundingBox: "block" };
+    },
+    equip: async (item) => calls.push(`equip:${item.name}`),
+    placeBlock: async () => calls.push("placeBlock"),
+    openFurnace: async () => ({
+      outputItem: () => null,
+      inputItem: () => null,
+      fuelItem: () => null,
+      close: () => {},
+    }),
+  };
+  const result = await executeAction(bot, "smelt_item", {}, {});
+  assert.ok(calls.includes("placeBlock"));
+  assert.deepEqual(result, { ok: false, reason: "nothing_to_smelt" });
 });
 
 test("smelt_itemは完成品があれば回収を優先する", async () => {

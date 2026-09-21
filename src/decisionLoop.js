@@ -99,8 +99,18 @@ export function startDecisionLoop(
     });
   };
 
+  // setIntervalは前回のtick(非同期)が完了していなくても次のtickを呼んで
+  // しまう。chop_wood/mine_nearest_ore等はpathfinding+採掘で数秒かかる
+  // ことがあり、これを待たずに次のtickが同じ/別の長時間行動を開始すると
+  // bot.collectBlock.collect()等が二重に走り、内部イベントリスナーが
+  // 蓄積し続ける(実機でMaxListenersExceededWarningを確認)。tick実行中は
+  // 次のtickを丸ごとスキップすることで、常に1つのtickしか動かないように
+  // する。
+  let tickRunning = false;
+
   const tick = async () => {
-    if (stopped) return;
+    if (stopped || tickRunning) return;
+    tickRunning = true;
 
     try {
       const observedPosition = bot.entity?.position;
@@ -205,6 +215,8 @@ export function startDecisionLoop(
         return;
       }
       console.error("[decisionLoop] error:", err.message);
+    } finally {
+      tickRunning = false;
     }
   };
 

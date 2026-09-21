@@ -351,6 +351,33 @@ async function chopWood(bot, cooldown) {
   }
 }
 
+// 自分の隣接4方向の足元ブロックのうち、上が空いている(設置可能な)場所を
+// 探す。視線の先(bot.blockAtCursor)は葉っぱ等の不安定なブロックに当たり
+// やすく、botが動かない限り同じ場所を見続けて設置失敗を繰り返す事例が
+// 実機で確認されたため、より安定した参照ブロックとして優先的に使う。
+function findGroundReferenceBlock(bot) {
+  const rawPos = bot.entity?.position;
+  if (!rawPos) return null;
+  // 小数点座標のまま隣接ブロックをoffsetすると、境界値(x.5等)で意図しない
+  // ブロックを指してしまい"the block is still air"のような設置拒否が
+  // 頻発する事例が実機で確認された。整数座標に切り捨ててから計算する。
+  const pos = rawPos.floored ? rawPos.floored() : rawPos;
+  const offsets = [
+    { x: 1, z: 0 },
+    { x: -1, z: 0 },
+    { x: 0, z: 1 },
+    { x: 0, z: -1 },
+  ];
+  for (const o of offsets) {
+    const ground = bot.blockAt?.(pos.offset(o.x, -1, o.z));
+    const space = bot.blockAt?.(pos.offset(o.x, 0, o.z));
+    if (ground && ground.boundingBox !== "empty" && space && space.boundingBox === "empty") {
+      return ground;
+    }
+  }
+  return null;
+}
+
 // インベントリ状況から次に作るべきアイテムを判定し(craftingKnowledge.js、
 // mine_nearest_oreの鉱石選定と同じく判断はコード側が決定的に行う)、
 // 必要なら作業台を探す/設置してからクラフトする。
@@ -373,7 +400,7 @@ async function craftNext(bot) {
     if (!tableBlock) {
       const tableItem = items.find((i) => i.name === "crafting_table");
       if (!tableItem) return { ok: false, reason: "no_crafting_table" };
-      const referenceBlock = bot.blockAtCursor?.(4);
+      const referenceBlock = findGroundReferenceBlock(bot) ?? bot.blockAtCursor?.(4);
       if (!referenceBlock) return { ok: false, reason: "no_reference_block" };
       try {
         await bot.equip(tableItem, "hand");
@@ -402,11 +429,32 @@ async function craftNext(bot) {
 // 約10秒)ため、この関数は投入までを行い完了を待たない。完了確認・回収は
 // 次回smelt_itemが選ばれた際にoutputItem()の有無で判定する。
 async function smeltItem(bot) {
-  const furnaceBlock = bot.findBlock?.({
+  let furnaceBlock = bot.findBlock?.({
     matching: (b) => b && (b.name === "furnace" || b.name === "lit_furnace"),
     maxDistance: 4,
   });
-  if (!furnaceBlock) return { ok: false, reason: "no_furnace" };
+
+  // 周辺に設置済みのかまどが無ければ、所持しているかまどアイテムを設置する。
+  // これが無いとcraft_itemでかまどを作っても永久にno_furnaceのまま使えない。
+  if (!furnaceBlock) {
+    const items = bot.inventory?.items() ?? [];
+    const furnaceItem = items.find((i) => i.name === "furnace");
+    if (!furnaceItem) return { ok: false, reason: "no_furnace" };
+
+    const referenceBlock = findGroundReferenceBlock(bot) ?? bot.blockAtCursor?.(4);
+    if (!referenceBlock) return { ok: false, reason: "no_reference_block" };
+    try {
+      await bot.equip(furnaceItem, "hand");
+      await bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
+    } catch (err) {
+      return { ok: false, reason: err.message };
+    }
+    furnaceBlock = bot.findBlock?.({
+      matching: (b) => b && (b.name === "furnace" || b.name === "lit_furnace"),
+      maxDistance: 4,
+    });
+    if (!furnaceBlock) return { ok: false, reason: "furnace_placement_failed" };
+  }
 
   let furnace;
   try {
@@ -439,12 +487,13 @@ async function smeltItem(bot) {
   }
 }
 
-// インベントリ内のブロックアイテムを、視線の先(カーソル)にあるブロックに接して設置する。
+// インベントリ内のブロックアイテムを設置する。足元付近の安定した地面を
+// 優先し、無ければ視線の先(カーソル)にフォールバックする。
 async function placeBlockNearby(bot) {
   const item = bot.inventory?.items().find((i) => PLACEABLE_PATTERN.test(i.name));
   if (!item) return { ok: false, reason: "no_block_item" };
 
-  const referenceBlock = bot.blockAtCursor?.(4);
+  const referenceBlock = findGroundReferenceBlock(bot) ?? bot.blockAtCursor?.(4);
   if (!referenceBlock) return { ok: false, reason: "no_reference_block" };
 
   try {
