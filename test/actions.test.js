@@ -305,18 +305,13 @@ test("fleeとexploreは水方向(water)を安全な方向として選ばない",
   assert.notEqual(result.detail.direction, "west");
 });
 
-test("escape_waterはジャンプを有効にし、安全な陸地方向へ移動する", async () => {
-  let jumpState = null;
-  let goalSet = null;
+test("escape_waterはpathfinderのgoalを解除し、向きを合わせて前進+ジャンプで泳ぐ", async () => {
+  const calls = [];
   const bot = {
     entity: { position: makeVec3(0, 64, 0) },
-    setControlState: (name, value) => {
-      if (name === "jump") jumpState = value;
-    },
-    pathfinderGoals: {
-      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
-    },
-    pathfinder: { setGoal: () => {} },
+    setControlState: (name, value) => calls.push(`${name}:${value}`),
+    lookAt: async () => calls.push("lookAt"),
+    pathfinder: { setGoal: (g) => calls.push(`setGoal:${g}`) },
   };
   const state = {
     terrain: { samples: { north: ["water"], south: ["clear"], east: ["water"], west: ["water"] } },
@@ -324,22 +319,16 @@ test("escape_waterはジャンプを有効にし、安全な陸地方向へ移�
   const result = await executeAction(bot, "escape_water", state, {});
   assert.equal(result.ok, true);
   assert.equal(result.detail.direction, "south");
-  assert.equal(jumpState, true);
-  assert.ok(goalSet);
+  assert.deepEqual(calls, ["setGoal:null", "lookAt", "forward:true", "jump:true"]);
 });
 
-test("escape_waterは全方向waterでも停止せず、水が最も少ない方向へ移動する", async () => {
-  let jumpState = null;
-  let goalSet = null;
+test("escape_waterは全方向waterでも停止せず、水が最も少ない方向へ泳ぐ", async () => {
+  const calls = [];
   const bot = {
     entity: { position: makeVec3(0, 64, 0) },
-    setControlState: (name, value) => {
-      if (name === "jump") jumpState = value;
-    },
-    pathfinderGoals: {
-      goals: { GoalNear: class { constructor(x, y, z, r) { goalSet = { x, y, z, r }; } } },
-    },
-    pathfinder: { setGoal: () => {} },
+    setControlState: (name, value) => calls.push(`${name}:${value}`),
+    lookAt: async () => calls.push("lookAt"),
+    pathfinder: { setGoal: (g) => calls.push(`setGoal:${g}`) },
   };
   // south方向はwaterが1個のみで、他は4個(相対的にsouthが浅い/近道)。
   const state = {
@@ -355,8 +344,23 @@ test("escape_waterは全方向waterでも停止せず、水が最も少ない方
   const result = await executeAction(bot, "escape_water", state, {});
   assert.equal(result.ok, true);
   assert.equal(result.detail.direction, "south");
-  assert.equal(jumpState, true);
-  assert.ok(goalSet, "水しかなくても必ずgotoを試みるべき");
+  assert.ok(calls.includes("forward:true"));
+  assert.ok(calls.includes("jump:true"));
+});
+
+test("escape_waterは前回方向を維持する", async () => {
+  const calls = [];
+  const bot = {
+    entity: { position: makeVec3(0, 64, 0) },
+    setControlState: (name, value) => calls.push(`${name}:${value}`),
+    lookAt: async () => calls.push("lookAt"),
+    pathfinder: { setGoal: () => {} },
+  };
+  const state = {
+    terrain: { samples: { north: ["clear"], south: ["clear"], east: ["clear"], west: ["clear"] } },
+  };
+  const result = await executeAction(bot, "escape_water", state, { previousEscapeDirection: "east" });
+  assert.equal(result.detail.direction, "east");
 });
 
 test("hunt_animalは食料になる動物が無ければno_targetを返す", async () => {

@@ -346,48 +346,61 @@ function countWaterInDirection(state, dirName) {
   return classes.filter((c) => c === "water").length;
 }
 
-// 水中(bot.entity.isInWater)からの緊急脱出。terrain上で"water"でない
-// 方向へ向かい、同時にジャンプを有効にして浮上を助ける(Minecraftの
-// 水中では泳ぐ/ジャンプで上昇できる)。安全な(waterを含まない)方向が
-// 無い場合でも、その場に留まらず必ず水が最も少ない方向へ移動を試みる
-// (広い水域の中心でjump_onlyのまま停止し続け、溺れてHPが1まで落ちる
-// 事例が実機で発生したため、必ず移動する設計に変更した)。
+// 水中(bot.entity.isInWater)からの緊急脱出。
 //
-// previousDirection: 直前tickで選んだ方向。250ms周期で毎回ランダムに
-// 選び直すと west→east→south→west… と方向が定まらずその場で足踏みし
-// 続ける事例が実機で発生したため、まだ有効な方向であれば維持する。
+// 重要: mineflayer-pathfinderは水中を移動可能な地形として扱わない設計
+// になっている(node_modules/mineflayer-pathfinder/lib/movements.jsに
+// "dont go underwater"/"cant jump from water"という制約がある)。その
+// ため水中にいる状態でbot.pathfinder.setGoal()を使っても経路計算が
+// 機能せず、goalを設定してもほとんど移動しないまま水域内で足踏みし
+// 続ける事例が実機で確認された。pathfinderには頼らず、向きを合わせて
+// 前進+ジャンプを直接制御する(Minecraftの水中移動の基本操作)方式に
+// 変更した。
+//
+// previousDirection: 直前tickで選んだ方向。250ms毎にランダムに選び直す
+// と west→east→south→west… と方向が定まらずその場で足踏みし続ける
+// 事例が実機で発生したため、まだ有効な方向であれば維持する。
 async function escapeWater(bot, state, previousDirection) {
   if (!bot.entity?.position) return { ok: false, reason: "no_position" };
 
-  bot.setControlState?.("jump", true);
-  try {
-    const safeDirs = state ? safeDirections(state) : null;
-    let dir;
-    if (safeDirs) {
-      dir = previousDirection && safeDirs.includes(previousDirection)
-        ? previousDirection
-        : safeDirs[Math.floor(Math.random() * safeDirs.length)];
-    } else if (previousDirection) {
-      // 安全な方向が無くても、前回方向を維持する方が一貫した移動になる。
-      dir = previousDirection;
-    } else {
-      const dirNames = Object.keys(DIRECTION_VECTORS);
-      dirNames.sort(
-        (a, b) => countWaterInDirection(state, a) - countWaterInDirection(state, b) || Math.random() - 0.5
-      );
-      dir = dirNames[0];
-    }
+  // pathfinderが裏でcontrolState(forward/jump等)を管理していると
+  // 直接制御と競合するため、既存のgoalを明示的に解除する。
+  bot.pathfinder?.setGoal(null);
 
-    const v = DIRECTION_VECTORS[dir];
-    const shore = bot.entity.position.offset(v.dx * 10, 0, v.dz * 10);
-    moveTo(bot, shore);
-    return { ok: true, detail: { direction: dir, target: { x: shore.x, y: shore.y, z: shore.z } } };
+  const safeDirs = state ? safeDirections(state) : null;
+  let dir;
+  if (safeDirs) {
+    dir = previousDirection && safeDirs.includes(previousDirection)
+      ? previousDirection
+      : safeDirs[Math.floor(Math.random() * safeDirs.length)];
+  } else if (previousDirection) {
+    // 安全な方向が無くても、前回方向を維持する方が一貫した移動になる。
+    dir = previousDirection;
+  } else {
+    const dirNames = Object.keys(DIRECTION_VECTORS);
+    dirNames.sort(
+      (a, b) => countWaterInDirection(state, a) - countWaterInDirection(state, b) || Math.random() - 0.5
+    );
+    dir = dirNames[0];
+  }
+
+  const v = DIRECTION_VECTORS[dir];
+  const target = bot.entity.position.offset(v.dx * 10, 1, v.dz * 10);
+
+  try {
+    await bot.lookAt?.(target, true);
+    bot.setControlState?.("forward", true);
+    bot.setControlState?.("jump", true);
+    return { ok: true, detail: { direction: dir, target: { x: target.x, y: target.y, z: target.z } } };
+  } catch (err) {
+    return { ok: false, reason: err.message };
   } finally {
-    // ジャンプ状態は次tickのexecuteAction冒頭(attack以外でforceStop相当は
-    // 行っていないため)に持ち越って構わない。水から出た後の行動選択時に
-    // 改めてsetControlStateがfalseへ戻されることを期待するのではなく、
-    // ここで明示的に一定時間後に解除する。
-    setTimeout(() => bot.setControlState?.("jump", false), 250);
+    // 次tick(250ms後)に新しい制御が発行されるので、それより少し早く
+    // 解除して制御の重複を防ぐ。
+    setTimeout(() => {
+      bot.setControlState?.("forward", false);
+      bot.setControlState?.("jump", false);
+    }, 200);
   }
 }
 
