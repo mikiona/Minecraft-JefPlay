@@ -90,6 +90,7 @@ export function startDecisionLoop(
       surroundedByHostiles: state.surroundedByHostiles,
       nearbyAnimals: state.nearbyAnimals,
       hasFood: state.foodStatus?.hasFood,
+      crafting: state.crafting,
       terrainSafe: state.terrain?.isSafe ?? null,
       homeDistance: state.homeDistance,
       action,

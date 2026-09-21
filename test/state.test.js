@@ -114,16 +114,26 @@ test("homePosition未指定ならhomeDistanceはnull", () => {
   assert.equal(state.homeDistance, null);
 });
 
-test("buildQuestionsは9つの選択肢を持つchoice質問を1つ返す", () => {
+test("buildQuestionsは12個の選択肢を持つchoice質問を1つ返す", () => {
   const questions = buildQuestions();
   assert.equal(questions.length, 1);
   const q = questions[0];
   assert.equal(q.type, "choice");
-  assert.equal(Object.keys(q.criteria).length, 9);
+  assert.equal(Object.keys(q.criteria).length, 12);
   assert.ok("mine_nearest_ore" in q.criteria);
   assert.ok("place_block" in q.criteria);
   assert.ok("return_to_base" in q.criteria);
   assert.ok("hunt_animal" in q.criteria);
+  assert.ok("chop_wood" in q.criteria);
+  assert.ok("craft_item" in q.criteria);
+  assert.ok("smelt_item" in q.criteria);
+});
+
+test("buildStateはcrafting(次のクラフト目標や資源カウント)を含む", () => {
+  const bot = makeBot({ items: [{ name: "oak_log", count: 2 }] });
+  const state = buildState(bot);
+  assert.equal(state.crafting.logCount, 2);
+  assert.equal(state.crafting.nextGoal, "oak_planks");
 });
 
 test("nearbyAnimalsは食料になる動物のみを距離付きで返す", () => {

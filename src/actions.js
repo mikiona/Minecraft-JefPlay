@@ -1,6 +1,13 @@
 // Jevの回答(Choice)をMineflayerのAPI呼び出しにマッピングする。
 import { Vec3 } from "vec3";
 import { classifyMob, selectBestFood, selectBestByTier, evaluateOreYFitness, isHuntableAnimal } from "./mobKnowledge.js";
+import {
+  LOG_PATTERN,
+  determineNextCraftGoal,
+  SMELTABLE_PATTERN,
+  RAW_MEAT_PATTERN,
+  FUEL_PATTERN,
+} from "./craftingKnowledge.js";
 
 // 採掘対象とみなす鉱石ブロック名(石系・ネザー系を含む代表的なもの)。
 const ORE_PATTERN = /(coal|iron|copper|gold|diamond|redstone|lapis|emerald)_ore$/;
@@ -48,6 +55,12 @@ export async function executeAction(bot, actionName, state, { cooldown, previous
       return placeBlockNearby(bot);
     case "return_to_base":
       return returnToBase(bot, state);
+    case "chop_wood":
+      return chopWood(bot, cooldown);
+    case "craft_item":
+      return craftNext(bot);
+    case "smelt_item":
+      return smeltItem(bot);
     case "escape_water":
       return escapeWater(bot, state, previousEscapeDirection);
     case "idle":
@@ -247,8 +260,10 @@ function exploreRandomly(bot, state) {
 // 到達不能・ツール不足・溶岩/落下の危険がある場合はcooldownに登録し、しばらく再試行しない。
 async function mineNearestOre(bot, cooldown) {
   const candidates = [];
+  // matching関数に渡るbはbot.blockAt()の戻り値で、アンロードされた
+  // チャンク等ではnullになりうる(実機で確認済みのクラッシュ原因)。
   bot.findBlocks?.({
-    matching: (b) => ORE_PATTERN.test(b.name) && !cooldown?.isOnCooldown(blockKey(b.position)),
+    matching: (b) => b && ORE_PATTERN.test(b.name) && !cooldown?.isOnCooldown(blockKey(b.position)),
     maxDistance: 16,
     count: 8,
   })?.forEach((pos) => {
@@ -259,7 +274,7 @@ async function mineNearestOre(bot, cooldown) {
   // findBlocksが使えない(モック等)場合はfindBlockに単純フォールバック。
   if (!candidates.length) {
     const single = bot.findBlock?.({
-      matching: (b) => ORE_PATTERN.test(b.name) && !cooldown?.isOnCooldown(blockKey(b.position)),
+      matching: (b) => b && ORE_PATTERN.test(b.name) && !cooldown?.isOnCooldown(blockKey(b.position)),
       maxDistance: 16,
     });
     if (single) candidates.push(single);
@@ -307,6 +322,120 @@ async function mineNearestOre(bot, cooldown) {
   } catch (err) {
     cooldown?.markFailed(blockKey(block.position));
     return { ok: false, reason: err.message };
+  }
+}
+
+// mineflayer-collectblockプラグインを使い、最寄りの丸太を伐採・ドロップ
+// 回収する。探索・接近・採掘・回収を1つのAPIコールにまとめてくれるため、
+// mine_nearest_oreのような自前のpathfinder制御は不要。
+//
+// 水中(bot.entity.isInWater)ではmineflayer-pathfinderが経路計算できず
+// (前述の"dont go underwater"制約)、collectBlock内部のbot.pathfinder.goto
+// が失敗して"Cannot read properties of null"のような例外を出す事例が
+// 実機で確認されたため、水中では実行しない。
+async function chopWood(bot, cooldown) {
+  if (bot.entity?.isInWater) return { ok: false, reason: "in_water" };
+
+  const logBlock = bot.findBlock?.({
+    matching: (b) => b && LOG_PATTERN.test(b.name) && !cooldown?.isOnCooldown(blockKey(b.position)),
+    maxDistance: 32,
+  });
+  if (!logBlock) return { ok: false, reason: "no_target" };
+
+  try {
+    await bot.collectBlock?.collect(logBlock);
+    return { ok: true, detail: { logType: logBlock.name } };
+  } catch (err) {
+    cooldown?.markFailed(blockKey(logBlock.position));
+    return { ok: false, reason: err.message };
+  }
+}
+
+// インベントリ状況から次に作るべきアイテムを判定し(craftingKnowledge.js、
+// mine_nearest_oreの鉱石選定と同じく判断はコード側が決定的に行う)、
+// 必要なら作業台を探す/設置してからクラフトする。
+async function craftNext(bot) {
+  const items = bot.inventory?.items() ?? [];
+  const nearbyTable = bot.findBlock?.({
+    matching: (b) => b && b.name === "crafting_table",
+    maxDistance: 4,
+  });
+
+  const goal = determineNextCraftGoal(items, { hasNearbyCraftingTable: !!nearbyTable });
+  if (!goal) return { ok: false, reason: "no_target" };
+
+  const itemData = bot.registry?.itemsByName?.[goal.item];
+  if (!itemData) return { ok: false, reason: "unknown_item" };
+
+  let tableBlock = null;
+  if (goal.needsTable) {
+    tableBlock = nearbyTable;
+    if (!tableBlock) {
+      const tableItem = items.find((i) => i.name === "crafting_table");
+      if (!tableItem) return { ok: false, reason: "no_crafting_table" };
+      const referenceBlock = bot.blockAtCursor?.(4);
+      if (!referenceBlock) return { ok: false, reason: "no_reference_block" };
+      try {
+        await bot.equip(tableItem, "hand");
+        await bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
+      } catch (err) {
+        return { ok: false, reason: err.message };
+      }
+      tableBlock = bot.findBlock?.({ matching: (b) => b && b.name === "crafting_table", maxDistance: 4 });
+      if (!tableBlock) return { ok: false, reason: "table_placement_failed" };
+    }
+  }
+
+  const recipes = bot.recipesFor?.(itemData.id, null, 1, tableBlock) ?? [];
+  if (!recipes.length) return { ok: false, reason: "no_recipe" };
+
+  try {
+    await bot.craft(recipes[0], 1, tableBlock ?? undefined);
+    return { ok: true, detail: { crafted: goal.item } };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+// かまどでの精錬。完了した精錬物があれば回収を優先し、無ければ燃料と
+// 精錬対象(鉄鉱石・生肉等)を投入する。精錬には時間がかかる(1個あたり
+// 約10秒)ため、この関数は投入までを行い完了を待たない。完了確認・回収は
+// 次回smelt_itemが選ばれた際にoutputItem()の有無で判定する。
+async function smeltItem(bot) {
+  const furnaceBlock = bot.findBlock?.({
+    matching: (b) => b && (b.name === "furnace" || b.name === "lit_furnace"),
+    maxDistance: 4,
+  });
+  if (!furnaceBlock) return { ok: false, reason: "no_furnace" };
+
+  let furnace;
+  try {
+    furnace = await bot.openFurnace?.(furnaceBlock);
+    if (!furnace) return { ok: false, reason: "cannot_open_furnace" };
+
+    if (furnace.outputItem?.()) {
+      await furnace.takeOutput();
+      return { ok: true, detail: { action: "collected" } };
+    }
+
+    const items = bot.inventory?.items() ?? [];
+    const smeltable = items.find((i) => SMELTABLE_PATTERN.test(i.name) || RAW_MEAT_PATTERN.test(i.name));
+    const fuel = items.find((i) => FUEL_PATTERN.test(i.name));
+
+    if (!smeltable) return { ok: false, reason: "nothing_to_smelt" };
+    if (!fuel) return { ok: false, reason: "no_fuel" };
+
+    if (!furnace.inputItem?.()) {
+      await furnace.putInput(smeltable.type, null, smeltable.count);
+    }
+    if (!furnace.fuelItem?.()) {
+      await furnace.putFuel(fuel.type, null, 1);
+    }
+    return { ok: true, detail: { action: "started", smelting: smeltable.name } };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  } finally {
+    furnace?.close?.();
   }
 }
 
@@ -431,7 +560,12 @@ async function gotoWithTimeout(bot, goal, { timeoutMs = PATHFINDER_TIMEOUT_MS } 
   return result;
 }
 
+// bot.findBlockのmatching関数に渡されるブロックはbot.blockAt(point)の
+// 戻り値で、アンロードされたチャンク等ではnullになりうる。posがnullでも
+// 安全に動作するようにする(実機で"Cannot read properties of null
+// (reading 'x')"というクラッシュを確認した)。
 function blockKey(pos) {
+  if (!pos) return "block:unknown";
   return `block:${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
 }
 

@@ -418,3 +418,157 @@ test("hunt_animalからattack_nearest_hostileへの切り替えではforceStop�
   await executeAction(bot, "hunt_animal", {}, {});
   assert.equal(forceStopCalled, false);
 });
+
+test("chop_woodは丸太が見つからなければno_targetを返す", async () => {
+  const bot = { findBlock: () => null };
+  const result = await executeAction(bot, "chop_wood", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_target" });
+});
+
+test("chop_woodはbot.collectBlock.collectで丸太を伐採する", async () => {
+  const calls = [];
+  const logPos = { x: 5, y: 64, z: 0 };
+  const bot = {
+    findBlock: ({ matching }) => {
+      const block = { name: "oak_log", position: logPos };
+      return matching(block) ? block : null;
+    },
+    collectBlock: { collect: async (block) => calls.push(`collect:${block.name}`) },
+  };
+  const result = await executeAction(bot, "chop_wood", {}, {});
+  assert.deepEqual(result, { ok: true, detail: { logType: "oak_log" } });
+  assert.deepEqual(calls, ["collect:oak_log"]);
+});
+
+test("chop_woodは失敗した丸太をクールダウンに登録する", async () => {
+  const cooldown = new CooldownTracker({ durationMs: 60000 });
+  const bot = {
+    findBlock: ({ matching }) => {
+      const block = { name: "oak_log", position: { x: 5, y: 64, z: 0 } };
+      return matching(block) ? block : null;
+    },
+    collectBlock: {
+      collect: async () => {
+        throw new Error("到達不能");
+      },
+    },
+  };
+  const first = await executeAction(bot, "chop_wood", {}, { cooldown });
+  assert.equal(first.ok, false);
+  const second = await executeAction(bot, "chop_wood", {}, { cooldown });
+  assert.deepEqual(second, { ok: false, reason: "no_target" });
+});
+
+test("craft_itemはクラフト目標が無ければno_targetを返す", async () => {
+  const bot = { inventory: { items: () => [] }, findBlock: () => null };
+  const result = await executeAction(bot, "craft_item", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_target" });
+});
+
+test("craft_itemは作業台不要なアイテム(木材変換等)を直接クラフトする", async () => {
+  const calls = [];
+  const bot = {
+    inventory: { items: () => [{ name: "oak_log", count: 1 }] },
+    findBlock: () => null,
+    registry: { itemsByName: { oak_planks: { id: 999 } } },
+    recipesFor: (id) => (id === 999 ? [{ id: "recipe" }] : []),
+    craft: async (recipe, count, table) => calls.push(`craft:${recipe.id}:${count}:${table}`),
+  };
+  const result = await executeAction(bot, "craft_item", {}, {});
+  assert.deepEqual(result, { ok: true, detail: { crafted: "oak_planks" } });
+  assert.deepEqual(calls, ["craft:recipe:1:undefined"]);
+});
+
+test("craft_itemは作業台が必要なアイテムで、近くに作業台が無ければ所持品から設置を試みる", async () => {
+  const calls = [];
+  const tableBlock = { name: "crafting_table", position: { x: 1, y: 64, z: 1 } };
+  let findBlockCallCount = 0;
+  const bot = {
+    inventory: {
+      items: () => [
+        { name: "crafting_table", count: 1 },
+        { name: "oak_planks", count: 3 },
+        { name: "stick", count: 2 },
+      ],
+    },
+    findBlock: ({ matching }) => {
+      findBlockCallCount++;
+      // 1回目(craftNext冒頭)は近くに無い、設置後の2回目は見つかる。
+      if (findBlockCallCount === 1) return null;
+      return matching(tableBlock) ? tableBlock : null;
+    },
+    blockAtCursor: () => ({ position: { x: 1, y: 63, z: 1 } }),
+    equip: async (item) => calls.push(`equip:${item.name}`),
+    placeBlock: async () => calls.push("placeBlock"),
+    registry: { itemsByName: { wooden_pickaxe: { id: 1000 } } },
+    recipesFor: (id, meta, min, table) => (id === 1000 && table === tableBlock ? [{ id: "recipe" }] : []),
+    craft: async (recipe, count, table) => calls.push(`craft:${recipe.id}:${count}:${table === tableBlock}`),
+  };
+  const result = await executeAction(bot, "craft_item", {}, {});
+  assert.deepEqual(result, { ok: true, detail: { crafted: "wooden_pickaxe" } });
+  assert.ok(calls.includes("placeBlock"));
+  assert.ok(calls.includes("craft:recipe:1:true"));
+});
+
+test("smelt_itemはかまどが無ければno_furnaceを返す", async () => {
+  const bot = { findBlock: () => null };
+  const result = await executeAction(bot, "smelt_item", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "no_furnace" });
+});
+
+test("smelt_itemは完成品があれば回収を優先する", async () => {
+  const calls = [];
+  const furnaceBlock = { name: "furnace", position: { x: 0, y: 64, z: 0 } };
+  const bot = {
+    findBlock: ({ matching }) => (matching(furnaceBlock) ? furnaceBlock : null),
+    openFurnace: async () => ({
+      outputItem: () => ({ name: "iron_ingot" }),
+      takeOutput: async () => calls.push("takeOutput"),
+      close: () => calls.push("close"),
+    }),
+  };
+  const result = await executeAction(bot, "smelt_item", {}, {});
+  assert.deepEqual(result, { ok: true, detail: { action: "collected" } });
+  assert.deepEqual(calls, ["takeOutput", "close"]);
+});
+
+test("smelt_itemは精錬対象と燃料が無ければnothing_to_smelt/no_fuelを返す", async () => {
+  const furnaceBlock = { name: "furnace", position: { x: 0, y: 64, z: 0 } };
+  const bot = {
+    findBlock: ({ matching }) => (matching(furnaceBlock) ? furnaceBlock : null),
+    inventory: { items: () => [] },
+    openFurnace: async () => ({
+      outputItem: () => null,
+      inputItem: () => null,
+      fuelItem: () => null,
+      close: () => {},
+    }),
+  };
+  const result = await executeAction(bot, "smelt_item", {}, {});
+  assert.deepEqual(result, { ok: false, reason: "nothing_to_smelt" });
+});
+
+test("smelt_itemは精錬対象と燃料があれば投入する", async () => {
+  const calls = [];
+  const furnaceBlock = { name: "furnace", position: { x: 0, y: 64, z: 0 } };
+  const bot = {
+    findBlock: ({ matching }) => (matching(furnaceBlock) ? furnaceBlock : null),
+    inventory: {
+      items: () => [
+        { name: "iron_ore", count: 3, type: 1 },
+        { name: "coal", count: 5, type: 2 },
+      ],
+    },
+    openFurnace: async () => ({
+      outputItem: () => null,
+      inputItem: () => null,
+      fuelItem: () => null,
+      putInput: async (type, meta, count) => calls.push(`putInput:${type}:${count}`),
+      putFuel: async (type, meta, count) => calls.push(`putFuel:${type}:${count}`),
+      close: () => calls.push("close"),
+    }),
+  };
+  const result = await executeAction(bot, "smelt_item", {}, {});
+  assert.deepEqual(result, { ok: true, detail: { action: "started", smelting: "iron_ore" } });
+  assert.deepEqual(calls, ["putInput:1:3", "putFuel:2:1", "close"]);
+});

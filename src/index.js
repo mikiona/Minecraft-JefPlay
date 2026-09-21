@@ -13,6 +13,10 @@ const { pathfinder, Movements, goals } = pathfinderPkg;
 // attackNearestHostile()の攻撃が無音で失敗していた(戦闘死の主因)。
 import pvpPkg from "mineflayer-pvp";
 const { plugin: pvp } = pvpPkg;
+// mineflayer-collectblockは木材伐採等の「探索→接近→採掘→ドロップ回収」を
+// 1関数(bot.collectBlock.collect)にまとめてくれる公式プラグイン。
+import collectBlockPkg from "mineflayer-collectblock";
+const { plugin: collectBlock } = collectBlockPkg;
 import { JevClient } from "./jevClient.js";
 import { startDecisionLoop } from "./decisionLoop.js";
 import { DecisionLogger } from "./logger.js";
@@ -51,8 +55,10 @@ const bot = mineflayer.createBot({
 });
 
 bot.loadPlugin(pathfinder);
-// mineflayer-pvpはmineflayer-pathfinderに依存するため、必ず後にロードする。
+// mineflayer-pvpとmineflayer-collectblockはmineflayer-pathfinderに依存する
+// ため、必ず後にロードする。
 bot.loadPlugin(pvp);
+bot.loadPlugin(collectBlock);
 // actions.js から参照するための簡易アクセサ。
 bot.pathfinderGoals = { goals };
 

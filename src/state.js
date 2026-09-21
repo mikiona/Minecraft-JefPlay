@@ -2,6 +2,7 @@
 // Jevに投げる質問(questions)を組み立てる。
 import { sampleTerrain } from "./terrain.js";
 import { classifyMob, isNightTime, selectBestByTier, selectBestFood, isHuntableAnimal } from "./mobKnowledge.js";
+import { LOG_PATTERN, determineNextCraftGoal } from "./craftingKnowledge.js";
 
 const NEARBY_RADIUS = 8;
 // 食料になる動物の探索範囲。actions.jsのFOOD_SEARCH_RADIUSと合わせる。
@@ -57,6 +58,31 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
 
   const items = bot.inventory?.items() ?? [];
 
+  // クラフト進行状況(Web調査の定石: 丸太→木材→作業台→木/石ツール→
+  // かまど→鉄ツール)。具体的に何を作るべきかはcraftingKnowledge.jsが
+  // 決定的に判定し(mine_nearest_oreの鉱石選定と同じ設計)、Jevには
+  // その結果(nextGoal)だけを判断材料として渡す。
+  const countOf = (pred) => items.filter(pred).reduce((sum, i) => sum + i.count, 0);
+  // matching関数に渡るbはbot.blockAt()の戻り値で、アンロードされた
+  // チャンク等ではnullになりうる(actions.jsで確認したクラッシュ原因と同じ)。
+  const nearbyCraftingTable = bot.findBlock?.({ matching: (b) => b && b.name === "crafting_table", maxDistance: 8 });
+  const nearbyFurnace = bot.findBlock?.({
+    matching: (b) => b && (b.name === "furnace" || b.name === "lit_furnace"),
+    maxDistance: 8,
+  });
+  const craftingGoal = determineNextCraftGoal(items, { hasNearbyCraftingTable: !!nearbyCraftingTable });
+
+  const crafting = {
+    logCount: countOf((i) => LOG_PATTERN.test(i.name)),
+    planksCount: countOf((i) => i.name.endsWith("_planks")),
+    stickCount: countOf((i) => i.name === "stick"),
+    cobbleCount: countOf((i) => i.name === "cobblestone"),
+    ironIngotCount: countOf((i) => i.name === "iron_ingot"),
+    hasNearbyCraftingTable: !!nearbyCraftingTable,
+    hasNearbyFurnace: !!nearbyFurnace,
+    nextGoal: craftingGoal?.item ?? null,
+  };
+
   return {
     health: bot.health,
     food: bot.food,
@@ -78,6 +104,7 @@ export function buildState(bot, { actionHistory = [], homePosition = null } = {}
     hostileCount,
     surroundedByHostiles: hostileCount >= SURROUNDED_THRESHOLD,
     nearbyAnimals,
+    crafting,
     heldItem: bot.heldItem?.name ?? null,
     equipment: {
       heldItem: bot.heldItem?.name ?? null,
@@ -115,13 +142,27 @@ export function buildQuestions() {
       type: "choice",
       instructions:
         "現在の状況(HP/満腹度と食料の所持有無/周辺の敵性エンティティとその種別/周辺の動物とその距離/" +
-        "夜間かどうか/装備/直近の行動履歴/周辺地形の安全性/拠点からの距離)に最も適した行動を選んで" +
-        "ください。地形が安全でない場合は移動を伴う行動を避けてください。" +
-        "同じ行動を実行しても状況(HP/満腹度/位置など)が変化しない場合、その行動は効果が無いか" +
-        "失敗しているとみなし、他の行動に切り替えるべきです。",
+        "夜間かどうか/装備/木材・道具のクラフト進行状況(crafting)/直近の行動履歴/周辺地形の安全性/" +
+        "拠点からの距離)に最も適した行動を選んでください。地形が安全でない場合は移動を伴う行動を避けて" +
+        "ください。同じ行動を実行しても状況(HP/満腹度/位置など)が変化しない場合、その行動は効果が無いか" +
+        "失敗しているとみなし、他の行動に切り替えるべきです。" +
+        "ゲームを進めるための優先順位: 丸太確保(chop_wood)→木材へ変換・作業台・木のツルハシ・木の剣" +
+        "(craft_item)→丸石採掘(mine_nearest_ore)→石のツルハシ・石の剣(craft_item)→かまど(craft_item)→" +
+        "鉄鉱石採掘・精錬(smelt_item)→鉄ツール(craft_item)、という順で装備を強化していくべきです。" +
+        "crafting.nextGoalに次に作るべきアイテム名が入っている場合、材料が揃っていればcraft_itemを" +
+        "積極的に選ぶこと。",
       criteria: {
+        chop_wood:
+          "所持している丸太・木材が少なく(crafting.logCount+crafting.planksCountが4未満)、" +
+          "ツルハシ等の道具がまだ整っていない場合。ゲーム序盤で最優先すべき行動",
+        craft_item:
+          "crafting.nextGoalに値が入っており、必要な材料(木材/棒/丸石/鉄インゴット)が揃っている場合。" +
+          "道具の進行(木→石→鉄)を進めるために、条件を満たしたら積極的に選ぶこと",
+        smelt_item:
+          "かまどが近くにあり(crafting.hasNearbyFurnace)、精錬すべき素材(鉄鉱石・生肉等)と" +
+          "燃料(木材・石炭等)を持っている場合。精錬済みの完成品がかまどにあれば回収のためにも選ぶこと",
         explore:
-          "他に緊急性のある行動(戦闘・逃走・食事・採掘・帰還)が不要なときのデフォルトの行動。" +
+          "他に緊急性のある行動(戦闘・逃走・食事・採掘・クラフト・帰還)が不要なときのデフォルトの行動。" +
           "周辺に脅威がなく地形が安全なら、特別な理由が無くても継続して探索し続けるべき。" +
           "同じ場所に留まり続ける理由がない限りこれを選ぶこと",
         flee:
